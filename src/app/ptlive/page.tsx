@@ -77,52 +77,83 @@ function buildRoster(players: ProjRec[], cfg: RosterConfig): RosterSlot[] {
     { key: "RP2", label: "RP", type: "reliever", pos: null, card: null },
   ];
 
-  const used = new Set<string>();
+  // Tier budget: track remaining capacity using cumulative ceilings.
+  //   p   = Perfect cards remaining (hard cap)
+  //   pd  = Perfect+Diamond combined remaining
+  //   pdg = Perfect+Diamond+Gold combined remaining
+  // A Diamond uses one pd and one pdg slot; a Perfect uses all three.
+  // Silver/Bronze/Iron are free (no budget consumed).
+  const budget = {
+    p: cfg.maxP,
+    pd: cfg.maxP + cfg.maxD,
+    pdg: cfg.maxP + cfg.maxD + cfg.maxG,
+  };
 
+  function canPlace(ovr: number): boolean {
+    const t = tierFromOvr(ovr);
+    if (t === "Perfect") return budget.p > 0 && budget.pd > 0 && budget.pdg > 0;
+    if (t === "Diamond") return budget.pd > 0 && budget.pdg > 0;
+    if (t === "Gold") return budget.pdg > 0;
+    return true;
+  }
+
+  function consume(ovr: number): void {
+    const t = tierFromOvr(ovr);
+    if (t === "Perfect") { budget.p--; budget.pd--; budget.pdg--; }
+    else if (t === "Diamond") { budget.pd--; budget.pdg--; }
+    else if (t === "Gold") { budget.pdg--; }
+  }
+
+  const used = new Set<string>();
   const hitters = [...players].filter((p) => p.role === "hitter").sort(byPP);
   const starters = [...players].filter((p) => p.role === "starter").sort(byPP);
   const relievers = [...players].filter((p) => p.role === "reliever").sort(byPP);
 
-  // 1. Fill required positional slots
+  function pick(
+    pool: ProjRec[],
+    posFilter?: (p: ProjRec) => boolean
+  ): ProjRec | null {
+    for (const p of pool) {
+      if (used.has(p.name)) continue;
+      if (posFilter && !posFilter(p)) continue;
+      if (!canPlace(p.ovr)) continue;
+      return p;
+    }
+    return null;
+  }
+
+  function assign(slot: RosterSlot, card: ProjRec) {
+    slot.card = card;
+    used.add(card.name);
+    consume(card.ovr);
+  }
+
+  // 1. Required positional hitter slots
   for (const slot of slots) {
     if (slot.type !== "hitter" || slot.pos === null) continue;
-    const best = hitters.find(
-      (h) => !used.has(h.name) && (h.cardPos === slot.pos || (slot.pos === "DH" && h.cardPos === "DH"))
-    );
-    if (best) {
-      slot.card = best;
-      used.add(best.name);
-    }
+    const card = pick(hitters, (h) => h.cardPos === slot.pos);
+    if (card) assign(slot, card);
   }
 
-  // 2. Fill DH + UTIL with best remaining hitters
+  // 2. Flex hitter slots (DH, UTIL) — best remaining that fits budget
   for (const slot of slots) {
     if (slot.type !== "hitter" || slot.pos !== null || slot.card !== null) continue;
-    const best = hitters.find((h) => !used.has(h.name));
-    if (best) {
-      slot.card = best;
-      used.add(best.name);
-    }
+    const card = pick(hitters);
+    if (card) assign(slot, card);
   }
 
-  // 3. Fill SP slots
+  // 3. Starting pitcher slots
   for (const slot of slots) {
     if (slot.type !== "starter") continue;
-    const best = starters.find((s) => !used.has(s.name));
-    if (best) {
-      slot.card = best;
-      used.add(best.name);
-    }
+    const card = pick(starters);
+    if (card) assign(slot, card);
   }
 
-  // 4. Fill RP slots
+  // 4. Relief pitcher slots
   for (const slot of slots) {
     if (slot.type !== "reliever") continue;
-    const best = relievers.find((r) => !used.has(r.name));
-    if (best) {
-      slot.card = best;
-      used.add(best.name);
-    }
+    const card = pick(relievers);
+    if (card) assign(slot, card);
   }
 
   return slots;
@@ -139,15 +170,18 @@ function countTiers(slots: RosterSlot[]): Record<string, number> {
 }
 
 function tierViolations(slots: RosterSlot[], cfg: RosterConfig): string[] {
+  // The buildRoster algorithm enforces budget during assignment, so violations
+  // here only appear if cfg was changed after the last build (shouldn't happen
+  // in practice) or if a card had no valid alternative.
   const t = countTiers(slots);
   const p = t["Perfect"] ?? 0;
   const d = t["Diamond"] ?? 0;
   const g = t["Gold"] ?? 0;
   const msgs: string[] = [];
-  if (p > cfg.maxP) msgs.push(`${p} Perfect cards (max ${cfg.maxP})`);
-  if (p + d > cfg.maxP + cfg.maxD) msgs.push(`${p + d} Perfect+Diamond (max ${cfg.maxP + cfg.maxD})`);
+  if (p > cfg.maxP) msgs.push(`${p} Perfect (max ${cfg.maxP})`);
+  if (p + d > cfg.maxP + cfg.maxD) msgs.push(`${p + d} Perfect+Diamond combined (max ${cfg.maxP + cfg.maxD})`);
   if (p + d + g > cfg.maxP + cfg.maxD + cfg.maxG)
-    msgs.push(`${p + d + g} Perfect+Diamond+Gold (max ${cfg.maxP + cfg.maxD + cfg.maxG})`);
+    msgs.push(`${p + d + g} Perfect+Diamond+Gold combined (max ${cfg.maxP + cfg.maxD + cfg.maxG})`);
   return msgs;
 }
 

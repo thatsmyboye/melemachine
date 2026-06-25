@@ -152,6 +152,10 @@ export async function GET(req: Request) {
     detail: string;
     matchupMult: number | null;
     components: Record<string, number> | null;
+    /** Player is today's probable starter (regardless of card role). */
+    startsToday: boolean;
+    /** Visual cue for role-vs-usage mismatch, e.g. an RP starting today. */
+    flag: "rp-start" | null;
   }
 
   const recs: Rec[] = matched.map((m) => {
@@ -162,18 +166,37 @@ export async function GET(req: Request) {
     if (m.isPitcher) {
       const oppRpg = ctx ? teamOffense.get(ctx.oppTeamId) ?? null : null;
       const mult = pitcherMatchupMult(oppRpg);
+      const startsToday = probableStarterIds.has(m.playerId);
+
       if (m.position === "SP") {
-        const starting = probableStarterIds.has(m.playerId);
-        if (!starting || !player?.pitch) {
-          return base(m, opponent, "starter", null, null, "Not starting today", null, null);
+        if (!startsToday || !player?.pitch) {
+          return base(m, opponent, "starter", null, null, "Not starting today", null, null, { startsToday: false });
         }
         const proj = projectStarter(player.pitch, { matchupMult: mult });
-        return base(m, opponent, "starter", proj?.pp ?? null, proj?.confidence ?? null, proj?.detail ?? "—", mult, proj?.components ?? null);
+        return base(m, opponent, "starter", proj?.pp ?? null, proj?.confidence ?? null, proj?.detail ?? "—", mult, proj?.components ?? null, { startsToday: true });
       }
-      // RP / CL
-      if (!player?.pitch) return base(m, opponent, "reliever", null, null, "No season data", null, null);
-      const proj = projectReliever(player.pitch, { appearanceProb: m.position === "CL" ? 0.5 : 0.45 });
-      return base(m, opponent, "reliever", proj?.pp ?? null, proj?.confidence ?? null, proj?.detail ?? "—", null, proj?.components ?? null);
+
+      // RP / CL — but a bullpen-labeled arm that is today's PROBABLE STARTER
+      // (opener / bulk guy) is guaranteed an appearance, so it's worth more
+      // than its card role implies. Bump appearance prob to 1.0 and flag it.
+      if (!player?.pitch) return base(m, opponent, "reliever", null, null, "No season data", null, null, { startsToday });
+      const appearanceProb = startsToday ? 1.0 : m.position === "CL" ? 0.5 : 0.45;
+      const proj = projectReliever(player.pitch, { appearanceProb });
+      if (proj && startsToday) {
+        proj.confidence = "medium";
+        proj.detail = `Probable STARTER today (card role ${m.position}) — guaranteed appearance, ~${proj.components.perAppearance} PP base`;
+      }
+      return base(
+        m,
+        opponent,
+        "reliever",
+        proj?.pp ?? null,
+        proj?.confidence ?? null,
+        proj?.detail ?? "—",
+        null,
+        proj?.components ?? null,
+        { startsToday, flag: startsToday ? "rp-start" : null }
+      );
     }
 
     // Hitter
@@ -198,7 +221,8 @@ export async function GET(req: Request) {
     confidence: Rec["confidence"],
     detail: string,
     matchupMult: number | null,
-    components: Record<string, number> | null
+    components: Record<string, number> | null,
+    extra: { startsToday?: boolean; flag?: Rec["flag"] } = {}
   ): Rec {
     return {
       name: m.cardName,
@@ -212,6 +236,8 @@ export async function GET(req: Request) {
       detail,
       matchupMult,
       components,
+      startsToday: extra.startsToday ?? false,
+      flag: extra.flag ?? null,
     };
   }
 

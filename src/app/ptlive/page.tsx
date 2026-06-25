@@ -27,6 +27,8 @@ interface ProjRec {
   confidence: "high" | "medium" | "low" | null;
   detail: string;
   matchupMult: number | null;
+  startsToday: boolean;
+  flag: "rp-start" | null;
 }
 
 type Mode = "projected" | "actual";
@@ -240,6 +242,20 @@ function RoleTag({ role }: { role: string }) {
   );
 }
 
+// Highlights a bullpen-labeled card that is actually today's probable starter
+// — a guaranteed appearance, so higher floor than its role suggests.
+function StartsBadge() {
+  return (
+    <span
+      className="ml-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide"
+      style={{ color: "#0b0e14", background: "#e3b341" }}
+      title="Bullpen card listed as today's probable starter — guaranteed appearance"
+    >
+      ▲ Starting
+    </span>
+  );
+}
+
 function ProjTable({ rows }: { rows: ProjRec[] }) {
   if (!rows.length)
     return <div className="text-gray-500 py-8">No projections available.</div>;
@@ -266,6 +282,7 @@ function ProjTable({ rows }: { rows: ProjRec[] }) {
               <td className="px-3 py-2 text-gray-500 tabular-nums">{i + 1}</td>
               <td className="px-3 py-2 text-gray-100">
                 {x.name}
+                {x.flag === "rp-start" && <StartsBadge />}
                 {x.active && (
                   <span className="ml-2 text-[9px] text-green-400 font-bold">
                     ACTIVE
@@ -317,6 +334,10 @@ function ProjTable({ rows }: { rows: ProjRec[] }) {
         </span>
         <span>
           <span style={{ color: CONF_COLOR.low }}>●</span> low (reliever)
+        </span>
+        <span className="text-gray-400">
+          <span style={{ color: "#e3b341" }}>▲ Starting</span> = bullpen card
+          starting today (guaranteed appearance)
         </span>
       </div>
     </div>

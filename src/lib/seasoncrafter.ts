@@ -159,7 +159,7 @@ function pitchRates(s: {
     era: s.era,
     whip: s.whip ?? (s.hits + s.bb) / ip,
     ipPerGs: s.gamesStarted > 0 ? s.ip / s.gamesStarted : 0,
-    babipAgainst: babip(s.hits, s.hr, bf - s.so, s.so),
+    babipAgainst: babip(s.hits, s.hr, Math.round(s.ip * 3) + s.hits, s.so),
   };
 }
 
@@ -267,7 +267,7 @@ export function projectHitterRatings(
   const d = hitRates(stats);
 
   const contactZ =
-    0.6 * z(league.avg, d.avg) + 0.4 * z(league.kPct, 1 - d.kPct - (1 - league.kPct[0]));
+    0.6 * z(league.avg, d.avg) - 0.4 * z(league.kPct, d.kPct);
   const gapZ = z(league.xbhPerAb, d.xbhPerAb);
   const powerZ =
     0.55 * z(league.hrPerAb, d.hrPerAb) + 0.45 * z(league.iso, d.iso);

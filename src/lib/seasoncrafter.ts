@@ -109,6 +109,7 @@ interface HitRates {
   babip: number;
   sbPerGame: number;
   sbPct: number;
+  sbAttempts: number;
 }
 
 function hitRates(s: {
@@ -133,6 +134,7 @@ function hitRates(s: {
     babip: babip(s.hits, s.hr, ab, s.so),
     sbPerGame: s.sb / g,
     sbPct: attempts >= 5 ? s.sb / attempts : 0.70,
+    sbAttempts: attempts,
   };
 }
 
@@ -232,7 +234,7 @@ export function computeHitLeague(players: LeagueHitter[]): HitLeague {
     triplesPerAb: ms(d.map((x) => x.triplesPerAb), 0.001),
     babip: ms(d.map((x) => x.babip), 0.010),
     sbPerGame: ms(d.map((x) => x.sbPerGame), 0.010),
-    sbPct: ms(d.map((x) => x.sbPct).filter((x) => x > 0), 0.05),
+    sbPct: ms(d.filter((x) => x.sbAttempts >= 5).map((x) => x.sbPct), 0.05),
   };
 }
 
@@ -277,13 +279,20 @@ export function projectHitterRatings(
   const speedZ =
     0.55 * z(league.sbPerGame, d.sbPerGame) +
     0.45 * z(league.triplesPerAb, d.triplesPerAb);
-  const stealingZ = z(league.sbPct, d.sbPct);
+  // For players with fewer than 5 steal attempts the sbPct value is a default
+  // (not a real measurement), so use sbPerGame as a proxy instead to avoid
+  // inflating stealing ratings for non-stealers.
+  const stealingZ = d.sbAttempts >= 5
+    ? z(league.sbPct, d.sbPct)
+    : z(league.sbPerGame, d.sbPerGame);
   const baserunZ = 0.6 * speedZ + 0.4 * stealingZ;
 
   // Fielding: rough proxy from speed + generic average
   // Specific defensive metrics (UZR/DRS) are not available from this API;
   // fielding ratings are marked accordingly in the UI.
-  const fieldBase = Math.max(20, Math.min(250, Math.round(125 + speedZ * 15)));
+  // Multiplier of 10 (vs the full 33 used in zr) dampens the speed→fielding
+  // correlation to avoid over-crediting pure baserunning speed as defence.
+  const fieldBase = Math.max(20, Math.min(250, Math.round(125 + speedZ * 10)));
 
   return {
     contact: zr(contactZ),

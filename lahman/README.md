@@ -4,24 +4,13 @@ Source CSVs for the Season Crafter historical reverse search.
 
 ## Download
 
-Run from the repo root:
+Run from the repo root in PowerShell:
 
-```bash
-BASE="https://raw.githubusercontent.com/chadwickbureau/baseballdatabank/master/core"
-curl -o lahman/People.csv      "$BASE/People.csv"
-curl -o lahman/Batting.csv     "$BASE/Batting.csv"
-curl -o lahman/Pitching.csv    "$BASE/Pitching.csv"
-curl -o lahman/Appearances.csv "$BASE/Appearances.csv"
-```
-
-Or with wget:
-
-```bash
-wget -P lahman \
-  https://raw.githubusercontent.com/chadwickbureau/baseballdatabank/master/core/People.csv \
-  https://raw.githubusercontent.com/chadwickbureau/baseballdatabank/master/core/Batting.csv \
-  https://raw.githubusercontent.com/chadwickbureau/baseballdatabank/master/core/Pitching.csv \
-  https://raw.githubusercontent.com/chadwickbureau/baseballdatabank/master/core/Appearances.csv
+```powershell
+$base = "https://raw.githubusercontent.com/chadwickbureau/baseballdatabank/master/core"
+foreach ($file in @("People.csv","Batting.csv","Pitching.csv","Appearances.csv")) {
+    Invoke-WebRequest -Uri "$base/$file" -OutFile "lahman\$file"
+}
 ```
 
 ## Compile

@@ -510,6 +510,7 @@ function ForwardSearch() {
   const [showSugg, setShowSugg] = useState(false);
   const [selectedPlayer, setSelectedPlayer] = useState<PlayerResult | null>(null);
   const [seasons, setSeasons] = useState<Season[]>([]);
+  const [inGameYears, setInGameYears] = useState<Set<number>>(new Set());
   const [selectedYear, setSelectedYear] = useState<number | null>(null);
   // null = use player's primary position; "pitcher" / "hitter" = explicit override
   const [roleOverride, setRoleOverride] = useState<"pitcher" | "hitter" | null>(null);
@@ -544,6 +545,7 @@ function ForwardSearch() {
     setShowSugg(false);
     setSuggestions([]);
     setSeasons([]);
+    setInGameYears(new Set());
     setSelectedYear(null);
     setRoleOverride(null);
     setResult(null);
@@ -551,9 +553,11 @@ function ForwardSearch() {
 
     setLoadingSeasons(true);
     try {
-      const res = await fetch(`/api/seasoncrafter/seasons?playerId=${p.id}`);
+      const url = `/api/seasoncrafter/seasons?playerId=${p.id}&name=${encodeURIComponent(p.name)}`;
+      const res = await fetch(url);
       const data = await res.json();
       setSeasons(data.seasons ?? []);
+      setInGameYears(new Set<number>(data.inGameYears ?? []));
     } catch { setErr("Could not load seasons"); }
     finally { setLoadingSeasons(false); }
   };
@@ -647,7 +651,9 @@ function ForwardSearch() {
                   Select season
                 </label>
                 <div className="flex flex-wrap gap-1.5">
-                  {seasons.map((s) => (
+                  {seasons.map((s) => {
+                    const inGame = inGameYears.has(s.year);
+                    return (
                     <button
                       key={s.year}
                       onClick={() => {
@@ -661,16 +667,22 @@ function ForwardSearch() {
                           setRoleOverride(null);
                         }
                       }}
-                      title={`${s.team} · ${s.gamesPlayed}G${s.pitchIP >= 10 ? ` · ${s.pitchIP.toFixed(1)} IP` : ""}`}
+                      title={inGame
+                        ? `${s.team} · ${s.gamesPlayed}G · Already in card pool`
+                        : `${s.team} · ${s.gamesPlayed}G${s.pitchIP >= 10 ? ` · ${s.pitchIP.toFixed(1)} IP` : ""}`}
                       className={`px-2.5 py-1 rounded-md text-xs border transition-colors ${
                         selectedYear === s.year
                           ? "border-accent bg-accent/15 text-accent"
+                          : inGame
+                          ? "border-edge/40 text-gray-600 cursor-default"
                           : "border-edge text-gray-400 hover:bg-panel2"
                       }`}
                     >
                       {s.year}
+                      {inGame && <span className="ml-1 opacity-60">✓</span>}
                     </button>
-                  ))}
+                    );
+                  })}
                 </div>
                 {seasonForYear && (
                   <p className="text-[11px] text-gray-500">

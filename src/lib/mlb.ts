@@ -176,6 +176,198 @@ export async function getBoxscoreLines(gamePk: number): Promise<{
   return { hitters, pitchers };
 }
 
+// ── Pre-game projection data ─────────────────────────────────────────────
+
+export interface SlateTeam {
+  id: number;
+  name: string;
+}
+export interface LineupSpot {
+  id: number;
+  name: string;
+  slot: number; // 1-9 batting order
+}
+export interface SlateGame {
+  gamePk: number;
+  status: string;
+  away: SlateTeam;
+  home: SlateTeam;
+  awayProbable?: ProbablePitcher;
+  homeProbable?: ProbablePitcher;
+  awayLineup: LineupSpot[];
+  homeLineup: LineupSpot[];
+}
+
+/** Schedule with probable pitchers and (when posted) batting orders. */
+export async function getSlate(date: string): Promise<SlateGame[]> {
+  const url = `${BASE}/schedule?sportId=1&date=${date}&hydrate=probablePitcher,lineups`;
+  const data = await getJson(url);
+  const out: SlateGame[] = [];
+  for (const d of data.dates ?? []) {
+    for (const g of d.games ?? []) {
+      const away = g.teams?.away;
+      const home = g.teams?.home;
+      const lineup = (arr: any[]): LineupSpot[] =>
+        (arr ?? []).map((p, i) => ({ id: p.id, name: p.fullName, slot: i + 1 }));
+      const probable = (t: any): ProbablePitcher | undefined =>
+        t?.probablePitcher
+          ? { id: t.probablePitcher.id, fullName: t.probablePitcher.fullName, team: t?.team?.name }
+          : undefined;
+      out.push({
+        gamePk: g.gamePk,
+        status: g.status?.detailedState ?? "",
+        away: { id: away?.team?.id, name: away?.team?.name ?? "" },
+        home: { id: home?.team?.id, name: home?.team?.name ?? "" },
+        awayProbable: probable(away),
+        homeProbable: probable(home),
+        awayLineup: lineup(g.lineups?.awayPlayers),
+        homeLineup: lineup(g.lineups?.homePlayers),
+      });
+    }
+  }
+  return out;
+}
+
+export interface RosterPlayer {
+  id: number;
+  name: string;
+  position: string;
+}
+
+export async function getActiveRoster(teamId: number): Promise<RosterPlayer[]> {
+  try {
+    const data = await getJson(`${BASE}/teams/${teamId}/roster?rosterType=active`);
+    return (data.roster ?? []).map((r: any) => ({
+      id: r.person?.id,
+      name: r.person?.fullName ?? "",
+      position: r.position?.abbreviation ?? "",
+    }));
+  } catch {
+    return [];
+  }
+}
+
+export interface HitSeason {
+  games: number;
+  pa: number;
+  h: number;
+  doubles: number;
+  triples: number;
+  hr: number;
+  r: number;
+  rbi: number;
+  bb: number;
+  hbp: number;
+  so: number;
+  sb: number;
+  cs: number;
+}
+export interface PitchSeason {
+  games: number;
+  gamesStarted: number;
+  ip: number;
+  er: number;
+  h: number;
+  bb: number;
+  hbp: number;
+  so: number;
+  hr: number;
+  wins: number;
+  saves: number;
+  holds: number;
+  era: number;
+}
+export interface PlayerSeason {
+  id: number;
+  name: string;
+  hit?: HitSeason;
+  pitch?: PitchSeason;
+}
+
+/** Batch-fetch current-season hitting & pitching stats for many players. */
+export async function getPeopleSeasonStats(
+  ids: number[],
+  season: number
+): Promise<Map<number, PlayerSeason>> {
+  const out = new Map<number, PlayerSeason>();
+  if (!ids.length) return out;
+  // Chunk to keep URLs sane.
+  const chunks: number[][] = [];
+  for (let i = 0; i < ids.length; i += 60) chunks.push(ids.slice(i, i + 60));
+  await Promise.all(
+    chunks.map(async (chunk) => {
+      const url = `${BASE}/people?personIds=${chunk.join(",")}&hydrate=stats(group=[hitting,pitching],type=[season],season=${season})`;
+      let data: any;
+      try {
+        data = await getJson(url);
+      } catch {
+        return;
+      }
+      for (const p of data.people ?? []) {
+        const h = p.stats?.find((s: any) => s.group?.displayName === "hitting")?.splits?.[0]?.stat;
+        const pit = p.stats?.find((s: any) => s.group?.displayName === "pitching")?.splits?.[0]?.stat;
+        out.set(p.id, {
+          id: p.id,
+          name: p.fullName,
+          hit: h
+            ? {
+                games: h.gamesPlayed ?? 0,
+                pa: h.plateAppearances ?? 0,
+                h: h.hits ?? 0,
+                doubles: h.doubles ?? 0,
+                triples: h.triples ?? 0,
+                hr: h.homeRuns ?? 0,
+                r: h.runs ?? 0,
+                rbi: h.rbi ?? 0,
+                bb: h.baseOnBalls ?? 0,
+                hbp: h.hitByPitch ?? 0,
+                so: h.strikeOuts ?? 0,
+                sb: h.stolenBases ?? 0,
+                cs: h.caughtStealing ?? 0,
+              }
+            : undefined,
+          pitch: pit
+            ? {
+                games: pit.gamesPlayed ?? 0,
+                gamesStarted: pit.gamesStarted ?? 0,
+                ip: ipToNumber(pit.inningsPitched),
+                er: pit.earnedRuns ?? 0,
+                h: pit.hits ?? 0,
+                bb: pit.baseOnBalls ?? 0,
+                hbp: pit.hitByPitch ?? 0,
+                so: pit.strikeOuts ?? 0,
+                hr: pit.homeRuns ?? 0,
+                wins: pit.wins ?? 0,
+                saves: pit.saves ?? 0,
+                holds: pit.holds ?? 0,
+                era: typeof pit.era === "string" ? parseFloat(pit.era) || 0 : pit.era ?? 0,
+              }
+            : undefined,
+        });
+      }
+    })
+  );
+  return out;
+}
+
+/** Runs-per-game by team id, for matchup adjustments. Neutral on failure. */
+export async function getTeamOffense(season: number): Promise<Map<number, number>> {
+  const out = new Map<number, number>();
+  try {
+    const data = await getJson(
+      `${BASE}/teams/stats?stats=season&group=hitting&season=${season}&sportIds=1`
+    );
+    for (const sp of data.stats?.[0]?.splits ?? []) {
+      const g = sp.stat?.gamesPlayed ?? 0;
+      const r = sp.stat?.runs ?? 0;
+      if (sp.team?.id && g > 0) out.set(sp.team.id, r / g);
+    }
+  } catch {
+    /* neutral */
+  }
+  return out;
+}
+
 /** Collect all stat lines for every game on a date. */
 export async function getDayStats(date: string): Promise<DayStats> {
   const games = await getSchedule(date);

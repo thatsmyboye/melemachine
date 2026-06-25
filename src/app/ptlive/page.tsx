@@ -7,7 +7,7 @@ interface Game {
   awayProbable: string | null;
   homeProbable: string | null;
 }
-interface Rec {
+interface ActualRec {
   name: string;
   position: string;
   ovr: number;
@@ -16,39 +16,101 @@ interface Rec {
   pointsToday: number | null;
   played: boolean;
 }
-interface PTLiveResponse {
-  date: string;
-  scoringConfirmed: boolean;
-  games: Game[];
-  liveCardCount: number;
-  recommendations: Rec[];
-  error?: string;
+interface ProjRec {
+  name: string;
+  cardPos: string;
+  ovr: number;
+  active: boolean;
+  role: "hitter" | "starter" | "reliever";
+  opponent: string;
+  projectedPP: number | null;
+  confidence: "high" | "medium" | "low" | null;
+  detail: string;
+  matchupMult: number | null;
 }
+
+type Mode = "projected" | "actual";
+
+const CONF_COLOR: Record<string, string> = {
+  high: "#4ade80",
+  medium: "#e3b341",
+  low: "#8a8f98",
+};
 
 export default function PTLivePage() {
   const [date, setDate] = useState("");
-  const [data, setData] = useState<PTLiveResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [mode, setMode] = useState<Mode>("projected");
+  const [games, setGames] = useState<Game[]>([]);
+  const [actual, setActual] = useState<ActualRec[]>([]);
+  const [proj, setProj] = useState<ProjRec[]>([]);
+  const [projNote, setProjNote] = useState("");
+  const [liveCount, setLiveCount] = useState(0);
+  const [loadingGames, setLoadingGames] = useState(true);
+  const [loadingTable, setLoadingTable] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
-  const load = (d?: string) => {
-    setLoading(true);
-    setErr(null);
-    const q = d ? `?date=${d}` : "";
+  const loadGames = (d?: string) => {
+    setLoadingGames(true);
+    const q = d ? `?date=${d}&stats=0` : "?stats=0";
     fetch(`/api/ptlive${q}`)
       .then((r) => r.json())
-      .then((res: PTLiveResponse) => {
+      .then((res) => {
         if (res.error) setErr(res.error);
-        setData(res);
+        setGames(res.games || []);
+        setLiveCount(res.liveCardCount || 0);
         setDate(res.date);
       })
-      .catch((e) => setErr(String(e)))
-      .finally(() => setLoading(false));
+      .finally(() => setLoadingGames(false));
   };
 
+  const loadTable = (m: Mode, d: string) => {
+    setLoadingTable(true);
+    setErr(null);
+    if (m === "actual") {
+      fetch(`/api/ptlive?date=${d}`)
+        .then((r) => r.json())
+        .then((res) => {
+          if (res.error) setErr(res.error);
+          setActual(res.recommendations || []);
+        })
+        .finally(() => setLoadingTable(false));
+    } else {
+      fetch(`/api/ptlive/projections?date=${d}`)
+        .then((r) => r.json())
+        .then((res) => {
+          if (res.error) setErr(res.error);
+          setProj(res.recommendations || []);
+          setProjNote(res.note || "");
+        })
+        .finally(() => setLoadingTable(false));
+    }
+  };
+
+  // initial: resolve today's date via games endpoint, then load table.
   useEffect(() => {
-    load();
+    setLoadingGames(true);
+    fetch(`/api/ptlive?stats=0`)
+      .then((r) => r.json())
+      .then((res) => {
+        setGames(res.games || []);
+        setLiveCount(res.liveCardCount || 0);
+        setDate(res.date);
+        loadTable("projected", res.date);
+      })
+      .finally(() => setLoadingGames(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const reload = () => {
+    if (!date) return;
+    loadGames(date);
+    loadTable(mode, date);
+  };
+
+  const switchMode = (m: Mode) => {
+    setMode(m);
+    if (date) loadTable(m, date);
+  };
 
   return (
     <div className="space-y-5">
@@ -56,8 +118,8 @@ export default function PTLivePage() {
         <div>
           <h1 className="text-xl font-bold">PT Live</h1>
           <p className="text-sm text-gray-400">
-            Your Live cards ranked for today&apos;s real MLB action. Data via the
-            MLB Stats API.
+            Your Live cards ranked for real MLB action. Projections use each
+            player&apos;s 2026 season form adjusted for today&apos;s matchup.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -68,7 +130,7 @@ export default function PTLivePage() {
             className="rounded-md border border-edge bg-ink px-2 py-1.5 text-sm"
           />
           <button
-            onClick={() => load(date)}
+            onClick={reload}
             className="rounded-md border border-accent bg-accent/15 text-accent px-3 py-1.5 text-sm"
           >
             Load
@@ -76,13 +138,29 @@ export default function PTLivePage() {
         </div>
       </div>
 
-      {!data?.scoringConfirmed && (
-        <div className="rounded-lg border border-tier-gold/40 bg-tier-gold/10 px-4 py-2.5 text-sm text-tier-gold">
-          ⚠ PT Live point values are provisional (a placeholder fantasy model).
-          Send the beanecounter scoring table and rankings will reflect exact
-          Perfect Points.
-        </div>
-      )}
+      {/* Mode toggle */}
+      <div className="inline-flex rounded-lg border border-edge overflow-hidden text-sm">
+        <button
+          onClick={() => switchMode("projected")}
+          className={`px-4 py-1.5 ${
+            mode === "projected"
+              ? "bg-accent/15 text-accent"
+              : "text-gray-400 hover:bg-panel2"
+          }`}
+        >
+          Projected (pre-game)
+        </button>
+        <button
+          onClick={() => switchMode("actual")}
+          className={`px-4 py-1.5 border-l border-edge ${
+            mode === "actual"
+              ? "bg-accent/15 text-accent"
+              : "text-gray-400 hover:bg-panel2"
+          }`}
+        >
+          Actual PP
+        </button>
+      </div>
 
       {err && (
         <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2.5 text-sm text-red-300">
@@ -90,79 +168,46 @@ export default function PTLivePage() {
         </div>
       )}
 
-      {loading && <div className="text-gray-400">Loading today&apos;s slate…</div>}
+      {mode === "projected" && projNote && (
+        <div className="rounded-lg border border-accent/30 bg-accent/5 px-4 py-2 text-xs text-gray-300">
+          {projNote}
+        </div>
+      )}
 
-      {data && !loading && (
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-5">
-          <div>
-            <h2 className="text-sm uppercase tracking-wide text-gray-400 mb-2">
-              Recommended starts · {data.liveCardCount} Live cards owned
-            </h2>
-            <div className="rounded-xl border border-edge overflow-hidden">
-              <table className="w-full text-sm">
-                <thead className="bg-panel2 text-gray-400 text-xs uppercase">
-                  <tr>
-                    <th className="text-left px-3 py-2 font-medium">#</th>
-                    <th className="text-left px-3 py-2 font-medium">Player</th>
-                    <th className="text-left px-2 py-2 font-medium">Pos</th>
-                    <th className="text-right px-2 py-2 font-medium">OVR</th>
-                    <th className="text-right px-3 py-2 font-medium">
-                      PP today
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.recommendations.map((r, i) => (
-                    <tr
-                      key={`${r.name}-${i}`}
-                      className="border-t border-edge hover:bg-panel2/50"
-                    >
-                      <td className="px-3 py-2 text-gray-500 tabular-nums">
-                        {i + 1}
-                      </td>
-                      <td className="px-3 py-2 text-gray-100">
-                        {r.name}
-                        {r.active && (
-                          <span className="ml-2 text-[9px] text-green-400 font-bold">
-                            ACTIVE
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-2 py-2 text-gray-300">{r.position}</td>
-                      <td className="px-2 py-2 text-right tabular-nums text-gray-300">
-                        {r.ovr}
-                      </td>
-                      <td className="px-3 py-2 text-right tabular-nums">
-                        {r.played ? (
-                          <span className="text-accent font-bold">
-                            {r.pointsToday}
-                          </span>
-                        ) : (
-                          <span className="text-gray-600">—</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-5">
+        <div>
+          <h2 className="text-sm uppercase tracking-wide text-gray-400 mb-2">
+            {mode === "projected" ? "Projected starts" : "Results"} ·{" "}
+            {liveCount} Live cards owned
+          </h2>
+
+          {loadingTable ? (
+            <div className="text-gray-400 py-8">
+              {mode === "projected"
+                ? "Building projections (matching rosters, pulling season stats)…"
+                : "Loading results…"}
             </div>
-            <p className="text-[11px] text-gray-500 mt-2">
-              Players whose teams haven&apos;t played yet show &ldquo;—&rdquo;
-              and are ranked by card quality until a projection model is added.
-            </p>
-          </div>
+          ) : mode === "projected" ? (
+            <ProjTable rows={proj} />
+          ) : (
+            <ActualTable rows={actual} />
+          )}
+        </div>
 
-          <div>
-            <h2 className="text-sm uppercase tracking-wide text-gray-400 mb-2">
-              Today&apos;s games
-            </h2>
+        <div>
+          <h2 className="text-sm uppercase tracking-wide text-gray-400 mb-2">
+            Today&apos;s games
+          </h2>
+          {loadingGames ? (
+            <div className="text-gray-500 text-sm">Loading slate…</div>
+          ) : (
             <div className="space-y-1.5">
-              {data.games.length === 0 && (
+              {games.length === 0 && (
                 <div className="text-gray-500 text-sm">
-                  No games scheduled for {data.date}.
+                  No games scheduled for {date}.
                 </div>
               )}
-              {data.games.map((g, i) => (
+              {games.map((g, i) => (
                 <div
                   key={i}
                   className="rounded-lg border border-edge bg-panel px-3 py-2 text-sm"
@@ -179,9 +224,145 @@ export default function PTLivePage() {
                 </div>
               ))}
             </div>
-          </div>
+          )}
         </div>
-      )}
+      </div>
+    </div>
+  );
+}
+
+function RoleTag({ role }: { role: string }) {
+  const label = role === "starter" ? "SP" : role === "reliever" ? "RP" : "HIT";
+  return (
+    <span className="text-[10px] px-1.5 py-0.5 rounded border border-edge text-gray-400">
+      {label}
+    </span>
+  );
+}
+
+function ProjTable({ rows }: { rows: ProjRec[] }) {
+  if (!rows.length)
+    return <div className="text-gray-500 py-8">No projections available.</div>;
+  return (
+    <div className="rounded-xl border border-edge overflow-hidden">
+      <table className="w-full text-sm">
+        <thead className="bg-panel2 text-gray-400 text-xs uppercase">
+          <tr>
+            <th className="text-left px-3 py-2 font-medium">#</th>
+            <th className="text-left px-3 py-2 font-medium">Player</th>
+            <th className="text-left px-2 py-2 font-medium">Role</th>
+            <th className="text-left px-2 py-2 font-medium hidden md:table-cell">
+              Matchup
+            </th>
+            <th className="text-right px-2 py-2 font-medium">Proj PP</th>
+            <th className="text-left px-3 py-2 font-medium hidden lg:table-cell">
+              Basis
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((x, i) => (
+            <tr key={`${x.name}-${i}`} className="border-t border-edge hover:bg-panel2/50">
+              <td className="px-3 py-2 text-gray-500 tabular-nums">{i + 1}</td>
+              <td className="px-3 py-2 text-gray-100">
+                {x.name}
+                {x.active && (
+                  <span className="ml-2 text-[9px] text-green-400 font-bold">
+                    ACTIVE
+                  </span>
+                )}
+              </td>
+              <td className="px-2 py-2">
+                <RoleTag role={x.role} />
+              </td>
+              <td className="px-2 py-2 hidden md:table-cell text-[11px] text-gray-400">
+                vs {x.opponent}
+                {x.matchupMult != null && (
+                  <span
+                    className={`ml-1.5 ${
+                      x.matchupMult > 1.03
+                        ? "text-green-400"
+                        : x.matchupMult < 0.97
+                          ? "text-red-400"
+                          : "text-gray-500"
+                    }`}
+                  >
+                    ×{x.matchupMult}
+                  </span>
+                )}
+              </td>
+              <td className="px-2 py-2 text-right tabular-nums font-bold">
+                {x.projectedPP == null ? (
+                  <span className="text-gray-600">—</span>
+                ) : (
+                  <span style={{ color: CONF_COLOR[x.confidence || "low"] }}>
+                    {x.projectedPP}
+                  </span>
+                )}
+              </td>
+              <td className="px-3 py-2 hidden lg:table-cell text-[11px] text-gray-500">
+                {x.detail}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="bg-panel2/40 px-3 py-2 text-[11px] text-gray-500 flex gap-4">
+        <span>
+          <span style={{ color: CONF_COLOR.high }}>●</span> high
+        </span>
+        <span>
+          <span style={{ color: CONF_COLOR.medium }}>●</span> medium (lineup not
+          posted)
+        </span>
+        <span>
+          <span style={{ color: CONF_COLOR.low }}>●</span> low (reliever)
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function ActualTable({ rows }: { rows: ActualRec[] }) {
+  return (
+    <div className="rounded-xl border border-edge overflow-hidden">
+      <table className="w-full text-sm">
+        <thead className="bg-panel2 text-gray-400 text-xs uppercase">
+          <tr>
+            <th className="text-left px-3 py-2 font-medium">#</th>
+            <th className="text-left px-3 py-2 font-medium">Player</th>
+            <th className="text-left px-2 py-2 font-medium">Pos</th>
+            <th className="text-right px-2 py-2 font-medium">OVR</th>
+            <th className="text-right px-3 py-2 font-medium">PP today</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={`${r.name}-${i}`} className="border-t border-edge hover:bg-panel2/50">
+              <td className="px-3 py-2 text-gray-500 tabular-nums">{i + 1}</td>
+              <td className="px-3 py-2 text-gray-100">
+                {r.name}
+                {r.active && (
+                  <span className="ml-2 text-[9px] text-green-400 font-bold">
+                    ACTIVE
+                  </span>
+                )}
+              </td>
+              <td className="px-2 py-2 text-gray-300">{r.position}</td>
+              <td className="px-2 py-2 text-right tabular-nums text-gray-300">
+                {r.ovr}
+              </td>
+              <td className="px-3 py-2 text-right tabular-nums">
+                {r.played ? (
+                  <span className="text-accent font-bold">{r.pointsToday}</span>
+                ) : (
+                  <span className="text-gray-600">—</span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

@@ -85,6 +85,68 @@ export async function getCareerSeasons(
     .sort((a, b) => a.year - b.year);
 }
 
+// Fetches both hitting and pitching groups simultaneously so two-way players
+// (e.g. historical pitchers who also batted) surface the correct role options.
+export interface CareerSeasonFull {
+  year: number;
+  team: string;
+  gamesPlayed: number;
+  hasHitting: boolean;
+  hasPitching: boolean;
+  pitchIP: number;
+}
+
+export async function getCareerSeasonsAll(playerId: number): Promise<CareerSeasonFull[]> {
+  const [hitData, pitchData] = await Promise.all([
+    hist(`/people/${playerId}/stats?stats=yearByYear&group=hitting&sportId=1&gameType=R`).catch(
+      () => ({ stats: [] })
+    ),
+    hist(`/people/${playerId}/stats?stats=yearByYear&group=pitching&sportId=1&gameType=R`).catch(
+      () => ({ stats: [] })
+    ),
+  ]);
+
+  const hitSplits: any[] = hitData.stats?.[0]?.splits ?? [];
+  const pitchSplits: any[] = pitchData.stats?.[0]?.splits ?? [];
+
+  const byYear = new Map<number, CareerSeasonFull>();
+
+  for (const s of hitSplits) {
+    const year = Number(s.season ?? 0);
+    if (!year) continue;
+    const g = s.stat?.gamesPlayed ?? 0;
+    const prev = byYear.get(year);
+    byYear.set(year, {
+      year,
+      team: prev ? "Multiple" : s.team?.name ?? "",
+      gamesPlayed: Math.max(prev?.gamesPlayed ?? 0, g),
+      hasHitting: true,
+      hasPitching: prev?.hasPitching ?? false,
+      pitchIP: prev?.pitchIP ?? 0,
+    });
+  }
+
+  for (const s of pitchSplits) {
+    const year = Number(s.season ?? 0);
+    if (!year) continue;
+    const g = s.stat?.gamesPlayed ?? 0;
+    const ip = ipToNum(s.stat?.inningsPitched);
+    const prev = byYear.get(year);
+    byYear.set(year, {
+      year,
+      team: prev?.team ?? s.team?.name ?? "",
+      gamesPlayed: Math.max(prev?.gamesPlayed ?? 0, g),
+      hasHitting: prev?.hasHitting ?? false,
+      hasPitching: true,
+      pitchIP: (prev?.pitchIP ?? 0) + ip,
+    });
+  }
+
+  return [...byYear.values()]
+    .filter((s) => s.gamesPlayed >= 5)
+    .sort((a, b) => a.year - b.year);
+}
+
 // ── Single-season hitting stats ──────────────────────────────────────────
 
 export interface SeasonHitStats {

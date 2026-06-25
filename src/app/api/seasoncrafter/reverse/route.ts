@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { getLeagueHitters, getLeaguePitchers } from "@/lib/mlbhistory";
 import {
+  getStaticLeagueHitters,
+  getStaticLeaguePitchers,
+  isStaticHistoryAvailable,
+} from "@/lib/historicaldata";
+import {
   computeHitLeague,
   computePitchLeague,
   projectHitterRatings,
@@ -55,9 +60,16 @@ export async function GET(req: Request) {
     existing.add(key);
   }
 
+  // Use pre-compiled Lahman data when available; fall back to the MLB Stats API.
+  // The static dataset covers 1871–present with complete coverage;
+  // the API covers recent seasons well but has gaps in pre-1950 data.
+  const useStatic = isStaticHistoryAvailable();
+
   try {
     if (isPitcher) {
-      const pitchers = await getLeaguePitchers(year);
+      const pitchers = useStatic
+        ? getStaticLeaguePitchers(year)
+        : await getLeaguePitchers(year);
       const league = computePitchLeague(pitchers);
 
       const results = pitchers
@@ -96,9 +108,11 @@ export async function GET(req: Request) {
           },
         }));
 
-      return NextResponse.json({ year, position, tier, results, isPitcher: true });
+      return NextResponse.json({ year, position, tier, results, isPitcher: true, source: useStatic ? "static" : "api" });
     } else {
-      const hitters = await getLeagueHitters(year);
+      const hitters = useStatic
+        ? getStaticLeagueHitters(year)
+        : await getLeagueHitters(year);
       const league = computeHitLeague(hitters);
 
       // Filter by position: position field in the API data
@@ -149,7 +163,7 @@ export async function GET(req: Request) {
           },
         }));
 
-      return NextResponse.json({ year, position, tier, results, isPitcher: false });
+      return NextResponse.json({ year, position, tier, results, isPitcher: false, source: useStatic ? "static" : "api" });
     }
   } catch (e) {
     return NextResponse.json(

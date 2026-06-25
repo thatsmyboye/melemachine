@@ -5,6 +5,7 @@
   "description": "Companion app for OOTP Perfect Team mode — rating intelligence, collection analysis, and PT Live recommendations.",
   "scripts": {
     "data": "tsx scripts/build-data.ts",
+    "history": "tsx scripts/build-history.ts",
     "predev": "npm run data",
     "prebuild": "npm run data",
     "dev": "next dev",

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getAllCards, getDatasetMeta } from "@/lib/data";
 import { RUN_ENVIRONMENTS, DEFAULT_WEIGHTS } from "@/lib/engine";
 import { CARD_TYPE_NAME, TIER_ORDER } from "@/lib/encodings";
+import { leagueRpgTable } from "@/lib/leagueavg";
 
 export const dynamic = "force-dynamic";
 
@@ -18,5 +19,6 @@ export async function GET() {
       .sort((a, b) => a.id - b.id),
     runEnvironments: Object.values(RUN_ENVIRONMENTS),
     defaultWeights: DEFAULT_WEIGHTS,
+    leagueRpg: leagueRpgTable(),
   });
 }

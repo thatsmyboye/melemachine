@@ -13,6 +13,18 @@ interface Meta {
   cardTypes: { id: number; name: string }[];
   runEnvironments: RunEnv[];
   defaultWeights: EngineWeights;
+  leagueRpg: Record<number, number>;
+}
+
+interface TournamentConfig {
+  active: boolean;
+  reYear: string;       // "" = not set, else e.g. "1929"
+  maxTier: string;      // "" = no limit, else tier name
+  excludeLive: boolean;
+  hasDH: boolean;
+  slotP: string;
+  slotD: string;
+  slotG: string;
 }
 
 interface Row {
@@ -52,6 +64,16 @@ export function CardExplorer() {
     owned: false,
     live: false,
   });
+  const [tourn, setTourn] = useState<TournamentConfig>({
+    active: false,
+    reYear: "",
+    maxTier: "",
+    excludeLive: false,
+    hasDH: true,
+    slotP: "2",
+    slotD: "3",
+    slotG: "4",
+  });
   const [sort, setSort] = useState("score");
   const [page, setPage] = useState(0);
   const [rows, setRows] = useState<Row[]>([]);
@@ -71,6 +93,13 @@ export function CardExplorer() {
 
   const reInfo = meta?.runEnvironments.find((e) => e.key === re);
 
+  // Resolve custom RPG from league year (or fall back to null)
+  const customRpg = useMemo(() => {
+    if (!tourn.active || !tourn.reYear || !meta?.leagueRpg) return null;
+    const year = Number(tourn.reYear);
+    return Number.isFinite(year) ? (meta.leagueRpg[year] ?? null) : null;
+  }, [tourn.active, tourn.reYear, meta?.leagueRpg]);
+
   const fetchCards = useCallback(() => {
     if (!weights) return;
     setLoading(true);
@@ -78,6 +107,7 @@ export function CardExplorer() {
     p.set("re", re);
     p.set("split", split);
     p.set("weights", JSON.stringify(weights));
+    if (customRpg != null) p.set("customRpg", String(customRpg));
     if (search) p.set("q", search);
     if (tiers.size) p.set("tiers", [...tiers].join(","));
     if (positions.size) p.set("pos", [...positions].join(","));
@@ -87,6 +117,8 @@ export function CardExplorer() {
     if (toggles.le) p.set("le", "1");
     if (toggles.owned) p.set("owned", "1");
     if (toggles.live) p.set("live", "1");
+    if (tourn.active && tourn.maxTier) p.set("maxTier", tourn.maxTier);
+    if (tourn.active && tourn.excludeLive) p.set("excludeLive", "1");
     p.set("sort", sort);
     p.set("page", String(page));
     p.set("pageSize", String(pageSize));
@@ -97,7 +129,7 @@ export function CardExplorer() {
         setTotal(res.total);
       })
       .finally(() => setLoading(false));
-  }, [weights, re, split, search, tiers, positions, type, toggles, sort, page]);
+  }, [weights, re, split, search, tiers, positions, type, toggles, sort, page, customRpg, tourn]);
 
   // Debounce
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -112,7 +144,7 @@ export function CardExplorer() {
   // Reset to page 0 when filters change
   useEffect(() => {
     setPage(0);
-  }, [re, split, search, tiers, positions, type, toggles, sort, weights]);
+  }, [re, split, search, tiers, positions, type, toggles, sort, weights, customRpg, tourn]);
 
   const toggleSet = (set: Set<string>, val: string, setter: (s: Set<string>) => void) => {
     const n = new Set(set);
@@ -182,6 +214,13 @@ export function CardExplorer() {
             </div>
           </div>
         </Panel>
+
+        <TournamentPanel
+          meta={meta}
+          tourn={tourn}
+          setTourn={setTourn}
+          customRpg={customRpg}
+        />
 
         <Panel>
           <div className="flex items-center justify-between mb-2">
@@ -300,7 +339,14 @@ export function CardExplorer() {
           <div className="text-sm text-gray-400">
             {loading ? "Scoring…" : `${total.toLocaleString()} cards`}{" "}
             <span className="text-gray-600">
-              · {reInfo?.label} · {split === "overall" ? "overall" : split}
+              ·{" "}
+              {customRpg != null
+                ? `${tourn.reYear} RE (${customRpg} R/G)`
+                : reInfo?.label}{" "}
+              · {split === "overall" ? "overall" : split}
+              {tourn.active && tourn.maxTier && (
+                <span className="ml-1">· ≤{tourn.maxTier}</span>
+              )}
             </span>
           </div>
           <select
@@ -424,6 +470,163 @@ export function CardExplorer() {
         />
       )}
     </div>
+  );
+}
+
+const TIER_OPTIONS = ["", "Perfect", "Diamond", "Gold", "Silver", "Bronze", "Iron"] as const;
+
+function TournamentPanel({
+  meta,
+  tourn,
+  setTourn,
+  customRpg,
+}: {
+  meta: Meta;
+  tourn: TournamentConfig;
+  setTourn: React.Dispatch<React.SetStateAction<TournamentConfig>>;
+  customRpg: number | null;
+}) {
+  const set = <K extends keyof TournamentConfig>(k: K, v: TournamentConfig[K]) =>
+    setTourn((t) => ({ ...t, [k]: v }));
+
+  const reYear = Number(tourn.reYear);
+  const yearValid = tourn.reYear !== "" && Number.isFinite(reYear);
+  const rpgResolved = yearValid ? (meta.leagueRpg[reYear] ?? null) : null;
+  const rpgNotFound = yearValid && rpgResolved == null;
+
+  return (
+    <Panel>
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-xs uppercase tracking-wide text-gray-400">
+          Tournament
+        </h3>
+        <label className="flex items-center gap-1.5 text-[11px] cursor-pointer">
+          <input
+            type="checkbox"
+            checked={tourn.active}
+            onChange={(e) => set("active", e.target.checked)}
+          />
+          <span className={tourn.active ? "text-accent" : "text-gray-400"}>
+            {tourn.active ? "Active" : "Off"}
+          </span>
+        </label>
+      </div>
+
+      {tourn.active && (
+        <div className="space-y-3">
+          {/* RE Year */}
+          <div>
+            <div className="text-[10px] text-gray-500 mb-1">
+              RE Year{" "}
+              <span className="text-gray-600">
+                (overrides preset — "Modern" = 2010)
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={1871}
+                max={2026}
+                placeholder="e.g. 1929"
+                value={tourn.reYear}
+                onChange={(e) => set("reYear", e.target.value)}
+                className="w-24 rounded-md border border-edge bg-ink px-2 py-1 text-sm outline-none focus:border-accent"
+              />
+              {customRpg != null && (
+                <span className="text-[11px] text-accent">
+                  {customRpg} R/G
+                </span>
+              )}
+              {rpgNotFound && (
+                <span className="text-[11px] text-red-400">No data</span>
+              )}
+            </div>
+          </div>
+
+          {/* Max Tier */}
+          <div>
+            <div className="text-[10px] text-gray-500 mb-1">Max card tier</div>
+            <select
+              value={tourn.maxTier}
+              onChange={(e) => set("maxTier", e.target.value)}
+              className="w-full rounded-md border border-edge bg-ink px-2 py-1 text-sm"
+            >
+              <option value="">No restriction</option>
+              {TIER_OPTIONS.slice(1).map((t) => (
+                <option key={t} value={t}>
+                  ≤ {t}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Card type toggles */}
+          <div className="space-y-1">
+            <div className="text-[10px] text-gray-500 mb-1">Card restrictions</div>
+            <label className="flex items-center gap-1.5 text-[11px] cursor-pointer">
+              <input
+                type="checkbox"
+                checked={tourn.excludeLive}
+                onChange={(e) => set("excludeLive", e.target.checked)}
+              />
+              Exclude Live (2026 MLB) cards
+            </label>
+          </div>
+
+          {/* DH */}
+          <div>
+            <div className="text-[10px] text-gray-500 mb-1">DH rule</div>
+            <div className="flex gap-1.5">
+              {([true, false] as const).map((v) => (
+                <button
+                  key={String(v)}
+                  onClick={() => set("hasDH", v)}
+                  className={`flex-1 rounded-md px-2 py-1 text-[11px] border ${
+                    tourn.hasDH === v
+                      ? "border-accent bg-accent/15 text-accent"
+                      : "border-edge text-gray-300 hover:bg-panel2"
+                  }`}
+                >
+                  {v ? "DH" : "No DH"}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Tier slots */}
+          <div>
+            <div className="text-[10px] text-gray-500 mb-1">
+              Max cards per tier{" "}
+              <span className="text-gray-600">(cumulative — lower fills higher)</span>
+            </div>
+            <div className="grid grid-cols-3 gap-1.5">
+              {(
+                [
+                  ["slotP", "Perfect"],
+                  ["slotD", "Diamond"],
+                  ["slotG", "Gold"],
+                ] as const
+              ).map(([k, label]) => (
+                <div key={k}>
+                  <div className="text-[9px] text-gray-600 mb-0.5">{label}</div>
+                  <input
+                    type="number"
+                    min={0}
+                    max={15}
+                    value={tourn[k]}
+                    onChange={(e) => set(k, e.target.value)}
+                    className="w-full rounded-md border border-edge bg-ink px-2 py-1 text-sm text-center"
+                  />
+                </div>
+              ))}
+            </div>
+            <p className="text-[10px] text-gray-600 mt-1">
+              Used in Roster Builder. Explorer shows eligible cards only.
+            </p>
+          </div>
+        </div>
+      )}
+    </Panel>
   );
 }
 

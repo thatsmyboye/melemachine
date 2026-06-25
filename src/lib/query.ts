@@ -1,6 +1,7 @@
 // Filtering, scoring, sorting and pagination over the card pool. Used by the
 // API routes so the heavy 4.5MB dataset never crosses the wire.
 import type { Card, Tier, PositionCode } from "./types";
+import { TIER_ORDER } from "./encodings";
 import {
   scoreCard,
   type ScoreContext,
@@ -13,6 +14,8 @@ import {
 export interface CardFilters {
   search?: string;
   tiers?: Tier[];
+  /** Only show cards at or below this tier (for tournament max-tier restriction). */
+  maxTier?: Tier;
   positions?: string[];
   cardTypes?: number[];
   pitchersOnly?: boolean;
@@ -20,6 +23,8 @@ export interface CardFilters {
   leOnly?: boolean;
   ownedOnly?: boolean;
   liveOnly?: boolean; // cardType 1 == Live (current MLB)
+  /** Exclude Live cards (cardType 1) — for Non-LIVE tournament restrictions. */
+  excludeLive?: boolean;
   minOvr?: number;
   maxOvr?: number;
   maxPrice?: number;
@@ -64,6 +69,11 @@ function matches(c: Card, f: CardFilters): boolean {
     if (!hay.includes(q)) return false;
   }
   if (f.tiers?.length && !f.tiers.includes(c.tier)) return false;
+  if (f.maxTier) {
+    const cap = TIER_ORDER.indexOf(f.maxTier);
+    const cardTier = TIER_ORDER.indexOf(c.tier);
+    if (cap >= 0 && cardTier > cap) return false;
+  }
   if (f.positions?.length && !f.positions.includes(c.position)) return false;
   if (f.cardTypes?.length && !f.cardTypes.includes(c.cardType)) return false;
   if (f.pitchersOnly && !c.isPitcher) return false;
@@ -71,6 +81,7 @@ function matches(c: Card, f: CardFilters): boolean {
   if (f.leOnly && !c.isLE) return false;
   if (f.ownedOnly && c.owned <= 0) return false;
   if (f.liveOnly && c.cardType !== 1) return false;
+  if (f.excludeLive && c.cardType === 1) return false;
   if (f.minOvr != null && c.ovr < f.minOvr) return false;
   if (f.maxOvr != null && c.ovr > f.maxOvr) return false;
   if (f.maxPrice != null) {
@@ -139,6 +150,11 @@ export function parseQuery(searchParams: URLSearchParams): QueryParams {
     runEnv: (searchParams.get("re") as RunEnvKey) || "medium",
     split: (searchParams.get("split") as Split) || "overall",
   };
+  const customRpgRaw = searchParams.get("customRpg");
+  if (customRpgRaw) {
+    const v = Number(customRpgRaw);
+    if (Number.isFinite(v) && v > 0) ctx.customRpg = v;
+  }
   const weightsRaw = searchParams.get("weights");
   if (weightsRaw) {
     try {
@@ -152,6 +168,7 @@ export function parseQuery(searchParams: URLSearchParams): QueryParams {
     filters: {
       search: searchParams.get("q") || undefined,
       tiers: csvStrs(searchParams.get("tiers")) as Tier[] | undefined,
+      maxTier: (searchParams.get("maxTier") as Tier) || undefined,
       positions: csvStrs(searchParams.get("pos")) as PositionCode[] | undefined,
       cardTypes: csvNums(searchParams.get("types")),
       pitchersOnly: bool(searchParams.get("pitchers")),
@@ -159,6 +176,7 @@ export function parseQuery(searchParams: URLSearchParams): QueryParams {
       leOnly: bool(searchParams.get("le")),
       ownedOnly: bool(searchParams.get("owned")),
       liveOnly: bool(searchParams.get("live")),
+      excludeLive: bool(searchParams.get("excludeLive")),
       minOvr: searchParams.get("minOvr") ? Number(searchParams.get("minOvr")) : undefined,
       maxOvr: searchParams.get("maxOvr") ? Number(searchParams.get("maxOvr")) : undefined,
       maxPrice: searchParams.get("maxPrice") ? Number(searchParams.get("maxPrice")) : undefined,

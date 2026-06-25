@@ -139,6 +139,18 @@ export interface ScoreContext {
   runEnv: RunEnvKey;
   split: Split;
   weights?: EngineWeights;
+  /** Override the preset RE with an exact R/G value (e.g. from a historical league year). */
+  customRpg?: number;
+}
+
+/** Build a one-off RunEnv from a specific R/G (e.g. a historical league year). */
+export function makeCustomRE(runsPerGame: number, label = `${runsPerGame} R/G`): RunEnv {
+  return {
+    key: "medium", // closest preset for reBias math anchor
+    label,
+    runsPerGame,
+    description: `Custom run environment: ~${runsPerGame} R/G`,
+  };
 }
 
 export interface ScoreBreakdown {
@@ -282,7 +294,9 @@ function scorePitching(
 }
 
 export function scoreCard(card: Card, ctx: ScoreContext): CardScore {
-  const env = RUN_ENVIRONMENTS[ctx.runEnv];
+  const env = ctx.customRpg != null
+    ? makeCustomRE(ctx.customRpg)
+    : RUN_ENVIRONMENTS[ctx.runEnv];
   const weights = ctx.weights ?? DEFAULT_WEIGHTS;
   const price = card.prices.last10 ?? card.prices.sellLow ?? card.prices.buyHigh;
 

@@ -13,6 +13,7 @@ const NAV = [
   { href: "/cards", label: "Card Explorer" },
   { href: "/collection", label: "My Collection" },
   { href: "/ptlive", label: "PT Live" },
+  { href: "/seasoncrafter", label: "Season Crafter" },
   { href: "/about", label: "Engine" },
 ];
 

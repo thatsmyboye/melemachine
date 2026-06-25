@@ -31,7 +31,125 @@ interface ProjRec {
   flag: "rp-start" | null;
 }
 
-type Mode = "projected" | "actual";
+type Mode = "projected" | "actual" | "roster";
+
+// ── Roster types ──────────────────────────────────────────────────────────────
+
+interface RosterSlot {
+  key: string;
+  label: string;
+  type: "hitter" | "starter" | "reliever";
+  pos: string | null; // required position, null = any
+  card: ProjRec | null;
+}
+
+interface RosterConfig {
+  hasDH: boolean;
+  maxP: number;
+  maxD: number;
+  maxG: number;
+}
+
+const DEFAULT_ROSTER_CONFIG: RosterConfig = { hasDH: true, maxP: 2, maxD: 3, maxG: 4 };
+
+function byPP(a: ProjRec, b: ProjRec): number {
+  return (b.projectedPP ?? -Infinity) - (a.projectedPP ?? -Infinity);
+}
+
+function buildRoster(players: ProjRec[], cfg: RosterConfig): RosterSlot[] {
+  const slots: RosterSlot[] = [
+    { key: "C", label: "C", type: "hitter", pos: "C", card: null },
+    { key: "1B", label: "1B", type: "hitter", pos: "1B", card: null },
+    { key: "2B", label: "2B", type: "hitter", pos: "2B", card: null },
+    { key: "3B", label: "3B", type: "hitter", pos: "3B", card: null },
+    { key: "SS", label: "SS", type: "hitter", pos: "SS", card: null },
+    { key: "LF", label: "LF", type: "hitter", pos: "LF", card: null },
+    { key: "CF", label: "CF", type: "hitter", pos: "CF", card: null },
+    { key: "RF", label: "RF", type: "hitter", pos: "RF", card: null },
+    ...(cfg.hasDH
+      ? [{ key: "DH", label: "DH", type: "hitter" as const, pos: null, card: null }]
+      : []),
+    { key: "UTIL1", label: "UTIL", type: "hitter", pos: null, card: null },
+    { key: "UTIL2", label: "UTIL", type: "hitter", pos: null, card: null },
+    { key: "SP1", label: "SP", type: "starter", pos: null, card: null },
+    { key: "SP2", label: "SP", type: "starter", pos: null, card: null },
+    { key: "RP1", label: "RP", type: "reliever", pos: null, card: null },
+    { key: "RP2", label: "RP", type: "reliever", pos: null, card: null },
+  ];
+
+  const used = new Set<string>();
+
+  const hitters = [...players].filter((p) => p.role === "hitter").sort(byPP);
+  const starters = [...players].filter((p) => p.role === "starter").sort(byPP);
+  const relievers = [...players].filter((p) => p.role === "reliever").sort(byPP);
+
+  // 1. Fill required positional slots
+  for (const slot of slots) {
+    if (slot.type !== "hitter" || slot.pos === null) continue;
+    const best = hitters.find(
+      (h) => !used.has(h.name) && (h.cardPos === slot.pos || (slot.pos === "DH" && h.cardPos === "DH"))
+    );
+    if (best) {
+      slot.card = best;
+      used.add(best.name);
+    }
+  }
+
+  // 2. Fill DH + UTIL with best remaining hitters
+  for (const slot of slots) {
+    if (slot.type !== "hitter" || slot.pos !== null || slot.card !== null) continue;
+    const best = hitters.find((h) => !used.has(h.name));
+    if (best) {
+      slot.card = best;
+      used.add(best.name);
+    }
+  }
+
+  // 3. Fill SP slots
+  for (const slot of slots) {
+    if (slot.type !== "starter") continue;
+    const best = starters.find((s) => !used.has(s.name));
+    if (best) {
+      slot.card = best;
+      used.add(best.name);
+    }
+  }
+
+  // 4. Fill RP slots
+  for (const slot of slots) {
+    if (slot.type !== "reliever") continue;
+    const best = relievers.find((r) => !used.has(r.name));
+    if (best) {
+      slot.card = best;
+      used.add(best.name);
+    }
+  }
+
+  return slots;
+}
+
+function countTiers(slots: RosterSlot[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const s of slots) {
+    if (!s.card) continue;
+    const t = tierFromOvr(s.card.ovr);
+    counts[t] = (counts[t] ?? 0) + 1;
+  }
+  return counts;
+}
+
+function tierViolations(slots: RosterSlot[], cfg: RosterConfig): string[] {
+  const t = countTiers(slots);
+  const p = t["Perfect"] ?? 0;
+  const d = t["Diamond"] ?? 0;
+  const g = t["Gold"] ?? 0;
+  const msgs: string[] = [];
+  if (p > cfg.maxP) msgs.push(`${p} Perfect cards (max ${cfg.maxP})`);
+  if (p + d > cfg.maxP + cfg.maxD) msgs.push(`${p + d} Perfect+Diamond (max ${cfg.maxP + cfg.maxD})`);
+  if (p + d + g > cfg.maxP + cfg.maxD + cfg.maxG)
+    msgs.push(`${p + d + g} Perfect+Diamond+Gold (max ${cfg.maxP + cfg.maxD + cfg.maxG})`);
+  return msgs;
+}
 
 const CONF_COLOR: Record<string, string> = {
   high: "#4ade80",
@@ -72,6 +190,7 @@ export default function PTLivePage() {
   const [loadingGames, setLoadingGames] = useState(true);
   const [loadingTable, setLoadingTable] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  const [rosterCfg, setRosterCfg] = useState<RosterConfig>(DEFAULT_ROSTER_CONFIG);
 
   const loadGames = (d?: string) => {
     setLoadingGames(true);
@@ -184,6 +303,19 @@ export default function PTLivePage() {
         >
           Actual PP
         </button>
+        <button
+          onClick={() => {
+            setMode("roster");
+            if (date && proj.length === 0) loadTable("projected", date);
+          }}
+          className={`px-4 py-1.5 border-l border-edge ${
+            mode === "roster"
+              ? "bg-accent/15 text-accent"
+              : "text-gray-400 hover:bg-panel2"
+          }`}
+        >
+          Roster Builder
+        </button>
       </div>
 
       {err && (
@@ -201,11 +333,27 @@ export default function PTLivePage() {
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-5">
         <div>
           <h2 className="text-sm uppercase tracking-wide text-gray-400 mb-2">
-            {mode === "projected" ? "Projected starts" : "Results"} ·{" "}
-            {liveCount} Live cards owned
+            {mode === "projected"
+              ? "Projected starts"
+              : mode === "roster"
+                ? "Optimal roster"
+                : "Results"}{" "}
+            · {liveCount} Live cards owned
           </h2>
 
-          {loadingTable ? (
+          {mode === "roster" ? (
+            loadingTable ? (
+              <div className="text-gray-400 py-8">
+                Building projections for roster assembly…
+              </div>
+            ) : (
+              <RosterBuilder
+                proj={proj}
+                cfg={rosterCfg}
+                setCfg={setRosterCfg}
+              />
+            )
+          ) : loadingTable ? (
             <div className="text-gray-400 py-8">
               {mode === "projected"
                 ? "Building projections (matching rosters, pulling season stats)…"
@@ -251,6 +399,146 @@ export default function PTLivePage() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Roster Builder ────────────────────────────────────────────────────────────
+
+function RosterBuilder({
+  proj,
+  cfg,
+  setCfg,
+}: {
+  proj: ProjRec[];
+  cfg: RosterConfig;
+  setCfg: (c: RosterConfig) => void;
+}) {
+  const slots = buildRoster(proj, cfg);
+  const violations = tierViolations(slots, cfg);
+  const tiers = countTiers(slots);
+  const projTotal = slots.reduce((s, sl) => s + (sl.card?.projectedPP ?? 0), 0);
+
+  return (
+    <div className="space-y-4">
+      {/* Config bar */}
+      <div className="rounded-lg border border-edge bg-panel px-4 py-3 flex flex-wrap gap-4 items-center text-sm">
+        <div className="flex items-center gap-2">
+          <span className="text-gray-400 text-[11px] uppercase tracking-wide">DH</span>
+          <button
+            onClick={() => setCfg({ ...cfg, hasDH: !cfg.hasDH })}
+            className={`px-2 py-0.5 rounded text-xs border ${
+              cfg.hasDH ? "border-accent text-accent" : "border-edge text-gray-400"
+            }`}
+          >
+            {cfg.hasDH ? "Yes" : "No DH"}
+          </button>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-gray-400 text-[11px]">Max tier slots:</span>
+          {(["maxP", "maxD", "maxG"] as const).map((k, i) => (
+            <label key={k} className="flex items-center gap-1 text-[11px]">
+              <span className="text-gray-500">{["P", "D", "G"][i]}</span>
+              <input
+                type="number"
+                min={0}
+                max={15}
+                value={cfg[k]}
+                onChange={(e) => setCfg({ ...cfg, [k]: Number(e.target.value) })}
+                className="w-10 rounded border border-edge bg-ink px-1 py-0.5 text-center text-xs"
+              />
+            </label>
+          ))}
+        </div>
+        <div className="ml-auto text-xs text-gray-400">
+          Proj total:{" "}
+          <span className="font-bold text-accent tabular-nums">
+            {projTotal.toFixed(1)} PP
+          </span>
+        </div>
+      </div>
+
+      {violations.length > 0 && (
+        <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-300 space-y-0.5">
+          <div className="font-semibold mb-1">Tier limit violations:</div>
+          {violations.map((v) => (
+            <div key={v}>• {v}</div>
+          ))}
+        </div>
+      )}
+
+      {/* Tier usage summary */}
+      <div className="flex gap-3 text-[11px] text-gray-400 flex-wrap">
+        {(["Perfect", "Diamond", "Gold", "Silver", "Bronze", "Iron"] as const).map((t) => {
+          const count = tiers[t] ?? 0;
+          if (count === 0) return null;
+          return (
+            <span key={t} style={{ color: TIER_COLORS[t] }}>
+              {count} {t}
+            </span>
+          );
+        })}
+      </div>
+
+      {/* Roster grid */}
+      <div className="space-y-1.5">
+        {slots.map((slot) => (
+          <RosterSlotRow key={slot.key} slot={slot} />
+        ))}
+      </div>
+
+      <p className="text-[11px] text-gray-500">
+        Algorithm: fills each positional slot with the highest projected-PP Live card at that position, then fills UTIL/DH/SP/RP with the remaining top scorers. Cards without a matchup today (PP = —) are deprioritized. Ohtani (SP card eligible at DH/UTIL) may need manual swap.
+      </p>
+    </div>
+  );
+}
+
+function RosterSlotRow({ slot }: { slot: RosterSlot }) {
+  const isEmpty = slot.card === null;
+  return (
+    <div
+      className={`flex items-center gap-3 rounded-lg border px-3 py-2 text-sm ${
+        isEmpty ? "border-edge/50 bg-panel/40" : "border-edge bg-panel"
+      }`}
+    >
+      <span className="w-10 shrink-0 text-[11px] font-bold text-gray-500 uppercase tracking-wide">
+        {slot.label}
+      </span>
+      {isEmpty ? (
+        <span className="text-gray-600 text-[11px]">— no eligible card</span>
+      ) : (
+        <>
+          <span
+            style={{ color: tierColor(slot.card!.ovr) }}
+            className="font-medium flex-1 leading-tight"
+          >
+            {slot.card!.name}
+          </span>
+          <span className="text-[10px] text-gray-500 hidden sm:block">
+            {slot.card!.cardPos}
+          </span>
+          <span className="text-[11px] tabular-nums">
+            {slot.card!.projectedPP != null ? (
+              <span
+                style={{
+                  color: CONF_COLOR[slot.card!.confidence || "low"],
+                }}
+                className="font-bold"
+              >
+                {slot.card!.projectedPP} PP
+              </span>
+            ) : (
+              <span className="text-gray-600">— PP</span>
+            )}
+          </span>
+          {slot.card!.active && (
+            <span className="text-[9px] text-green-400 font-bold shrink-0">
+              ACTIVE
+            </span>
+          )}
+        </>
+      )}
     </div>
   );
 }

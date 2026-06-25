@@ -357,7 +357,7 @@ function ComparablesTable({ rows, alreadyInGame }: {
 // ── Reverse search results ────────────────────────────────────────────────
 
 const POSITIONS = ["C","1B","2B","3B","SS","LF","CF","RF","DH","SP","RP"];
-const TIERS = ["Perfect","Diamond","Gold","Silver","Bronze"] as const;
+const TIERS = ["Perfect","Diamond","Gold","Silver","Bronze","Iron"] as const;
 
 function ReverseSearch() {
   const [position, setPosition] = useState("SS");

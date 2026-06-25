@@ -48,19 +48,20 @@ export const HAND_BY_CODE: Record<string, Handed> = {
   "3": "S",
 };
 
-// Card Type numeric -> human label. Inferred from card pool + collection
-// distributions; refine as the mapping is confirmed against the game.
+// Card Type numeric -> game-canonical label (confirmed against in-game filter UI).
+// Note: T4 cards (series "T4 Ep. 1/2/3") are distributed across multiple types
+// and are identifiable via the Card.series field, not a distinct numeric type code.
 export const CARD_TYPE_NAME: Record<string, string> = {
-  "1": "Live (Current MLB)",
-  "2": "All-Star",
-  "3": "Snapshot",
-  "4": "Legend",
-  "5": "Rookie",
-  "6": "Flashback",
-  "7": "Veteran",
-  "8": "Unsung",
-  "9": "Hall of History",
-  "10": "Negro Leagues",
+  "1": "2026 MLB Live Card",
+  "2": "Negro League Star",
+  "3": "Rookie Sensation",
+  "4": "All-Time Legend",
+  "5": "Historical All-Star",
+  "6": "Future Legend",
+  "7": "Snapshot",
+  "8": "Unsung Heroes",
+  "9": "Hardware Heroes",
+  "10": "Veteran Presence",
 };
 
 export const TIER_ORDER: Tier[] = [

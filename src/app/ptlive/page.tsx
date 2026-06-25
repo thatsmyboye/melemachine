@@ -39,6 +39,28 @@ const CONF_COLOR: Record<string, string> = {
   low: "#8a8f98",
 };
 
+const TIER_COLORS: Record<string, string> = {
+  Iron: "#8a8f98",
+  Bronze: "#b87333",
+  Silver: "#c0c5ce",
+  Gold: "#e3b341",
+  Diamond: "#5ad1e6",
+  Perfect: "#c084fc",
+};
+
+function tierFromOvr(ovr: number): string {
+  if (ovr >= 100) return "Perfect";
+  if (ovr >= 90) return "Diamond";
+  if (ovr >= 80) return "Gold";
+  if (ovr >= 70) return "Silver";
+  if (ovr >= 60) return "Bronze";
+  return "Iron";
+}
+
+function tierColor(ovr: number): string {
+  return TIER_COLORS[tierFromOvr(ovr)] ?? "#e5e7eb";
+}
+
 export default function PTLivePage() {
   const [date, setDate] = useState("");
   const [mode, setMode] = useState<Mode>("projected");
@@ -259,72 +281,103 @@ function StartsBadge() {
 function ProjTable({ rows }: { rows: ProjRec[] }) {
   if (!rows.length)
     return <div className="text-gray-500 py-8">No projections available.</div>;
+
+  const hitters = rows.filter((r) => r.role === "hitter");
+  const pitchers = rows.filter((r) => r.role !== "hitter");
+
+  const thead = (
+    <thead className="bg-panel2 text-gray-400 text-xs uppercase">
+      <tr>
+        <th className="text-left px-3 py-2 font-medium">#</th>
+        <th className="text-left px-3 py-2 font-medium">Player</th>
+        <th className="text-left px-2 py-2 font-medium">Role</th>
+        <th className="text-left px-2 py-2 font-medium hidden md:table-cell">
+          Matchup
+        </th>
+        <th className="text-right px-2 py-2 font-medium">Proj PP</th>
+        <th className="text-left px-3 py-2 font-medium hidden lg:table-cell">
+          Basis
+        </th>
+      </tr>
+    </thead>
+  );
+
+  const renderRows = (group: ProjRec[], offset: number) =>
+    group.map((x, i) => (
+      <tr key={`${x.name}-${i}`} className="border-t border-edge hover:bg-panel2/50">
+        <td className="px-3 py-2 text-gray-500 tabular-nums">{offset + i + 1}</td>
+        <td className="px-3 py-2">
+          <span style={{ color: tierColor(x.ovr) }} className="font-medium">
+            {x.name}
+          </span>
+          {x.flag === "rp-start" && <StartsBadge />}
+          {x.active && (
+            <span className="ml-2 text-[9px] text-green-400 font-bold">
+              ACTIVE
+            </span>
+          )}
+        </td>
+        <td className="px-2 py-2">
+          <RoleTag role={x.role} />
+        </td>
+        <td className="px-2 py-2 hidden md:table-cell text-[11px] text-gray-400">
+          vs {x.opponent}
+          {x.matchupMult != null && (
+            <span
+              className={`ml-1.5 ${
+                x.matchupMult > 1.03
+                  ? "text-green-400"
+                  : x.matchupMult < 0.97
+                    ? "text-red-400"
+                    : "text-gray-500"
+              }`}
+            >
+              ×{x.matchupMult}
+            </span>
+          )}
+        </td>
+        <td className="px-2 py-2 text-right tabular-nums font-bold">
+          {x.projectedPP == null ? (
+            <span className="text-gray-600">—</span>
+          ) : (
+            <span style={{ color: CONF_COLOR[x.confidence || "low"] }}>
+              {x.projectedPP}
+            </span>
+          )}
+        </td>
+        <td className="px-3 py-2 hidden lg:table-cell text-[11px] text-gray-500">
+          {x.detail}
+        </td>
+      </tr>
+    ));
+
   return (
-    <div className="rounded-xl border border-edge overflow-hidden">
-      <table className="w-full text-sm">
-        <thead className="bg-panel2 text-gray-400 text-xs uppercase">
-          <tr>
-            <th className="text-left px-3 py-2 font-medium">#</th>
-            <th className="text-left px-3 py-2 font-medium">Player</th>
-            <th className="text-left px-2 py-2 font-medium">Role</th>
-            <th className="text-left px-2 py-2 font-medium hidden md:table-cell">
-              Matchup
-            </th>
-            <th className="text-right px-2 py-2 font-medium">Proj PP</th>
-            <th className="text-left px-3 py-2 font-medium hidden lg:table-cell">
-              Basis
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((x, i) => (
-            <tr key={`${x.name}-${i}`} className="border-t border-edge hover:bg-panel2/50">
-              <td className="px-3 py-2 text-gray-500 tabular-nums">{i + 1}</td>
-              <td className="px-3 py-2 text-gray-100">
-                {x.name}
-                {x.flag === "rp-start" && <StartsBadge />}
-                {x.active && (
-                  <span className="ml-2 text-[9px] text-green-400 font-bold">
-                    ACTIVE
-                  </span>
-                )}
-              </td>
-              <td className="px-2 py-2">
-                <RoleTag role={x.role} />
-              </td>
-              <td className="px-2 py-2 hidden md:table-cell text-[11px] text-gray-400">
-                vs {x.opponent}
-                {x.matchupMult != null && (
-                  <span
-                    className={`ml-1.5 ${
-                      x.matchupMult > 1.03
-                        ? "text-green-400"
-                        : x.matchupMult < 0.97
-                          ? "text-red-400"
-                          : "text-gray-500"
-                    }`}
-                  >
-                    ×{x.matchupMult}
-                  </span>
-                )}
-              </td>
-              <td className="px-2 py-2 text-right tabular-nums font-bold">
-                {x.projectedPP == null ? (
-                  <span className="text-gray-600">—</span>
-                ) : (
-                  <span style={{ color: CONF_COLOR[x.confidence || "low"] }}>
-                    {x.projectedPP}
-                  </span>
-                )}
-              </td>
-              <td className="px-3 py-2 hidden lg:table-cell text-[11px] text-gray-500">
-                {x.detail}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <div className="bg-panel2/40 px-3 py-2 text-[11px] text-gray-500 flex gap-4">
+    <div className="space-y-4">
+      {hitters.length > 0 && (
+        <div className="rounded-xl border border-edge overflow-hidden">
+          <div className="bg-panel2/70 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-widest text-gray-400 border-b border-edge">
+            Hitters
+          </div>
+          <table className="w-full text-sm">
+            {thead}
+            <tbody>{renderRows(hitters, 0)}</tbody>
+          </table>
+        </div>
+      )}
+
+      {pitchers.length > 0 && (
+        <div className="rounded-xl border border-edge overflow-hidden">
+          <div className="bg-panel2/70 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-widest text-gray-400 border-b border-edge">
+            Pitchers
+          </div>
+          <table className="w-full text-sm">
+            {thead}
+            <tbody>{renderRows(pitchers, 0)}</tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="rounded-lg border border-edge bg-panel2/40 px-3 py-2 text-[11px] text-gray-500 flex flex-wrap gap-4">
         <span>
           <span style={{ color: CONF_COLOR.high }}>●</span> high
         </span>
@@ -345,45 +398,76 @@ function ProjTable({ rows }: { rows: ProjRec[] }) {
 }
 
 function ActualTable({ rows }: { rows: ActualRec[] }) {
+  const hitters = rows.filter((r) => !r.isPitcher);
+  const pitchers = rows.filter((r) => r.isPitcher);
+
+  const thead = (
+    <thead className="bg-panel2 text-gray-400 text-xs uppercase">
+      <tr>
+        <th className="text-left px-3 py-2 font-medium">#</th>
+        <th className="text-left px-3 py-2 font-medium">Player</th>
+        <th className="text-left px-2 py-2 font-medium">Pos</th>
+        <th className="text-right px-2 py-2 font-medium">OVR</th>
+        <th className="text-right px-3 py-2 font-medium">PP today</th>
+      </tr>
+    </thead>
+  );
+
+  const renderRows = (group: ActualRec[]) =>
+    group.map((r, i) => (
+      <tr key={`${r.name}-${i}`} className="border-t border-edge hover:bg-panel2/50">
+        <td className="px-3 py-2 text-gray-500 tabular-nums">{i + 1}</td>
+        <td className="px-3 py-2">
+          <span style={{ color: tierColor(r.ovr) }} className="font-medium">
+            {r.name}
+          </span>
+          {r.active && (
+            <span className="ml-2 text-[9px] text-green-400 font-bold">
+              ACTIVE
+            </span>
+          )}
+        </td>
+        <td className="px-2 py-2 text-gray-300">{r.position}</td>
+        <td className="px-2 py-2 text-right tabular-nums text-gray-300">
+          {r.ovr}
+        </td>
+        <td className="px-3 py-2 text-right tabular-nums">
+          {r.played ? (
+            <span className="text-accent font-bold">{r.pointsToday}</span>
+          ) : (
+            <span className="text-gray-600">—</span>
+          )}
+        </td>
+      </tr>
+    ));
+
+  if (!hitters.length && !pitchers.length)
+    return <div className="text-gray-500 py-8">No results available.</div>;
+
   return (
-    <div className="rounded-xl border border-edge overflow-hidden">
-      <table className="w-full text-sm">
-        <thead className="bg-panel2 text-gray-400 text-xs uppercase">
-          <tr>
-            <th className="text-left px-3 py-2 font-medium">#</th>
-            <th className="text-left px-3 py-2 font-medium">Player</th>
-            <th className="text-left px-2 py-2 font-medium">Pos</th>
-            <th className="text-right px-2 py-2 font-medium">OVR</th>
-            <th className="text-right px-3 py-2 font-medium">PP today</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={`${r.name}-${i}`} className="border-t border-edge hover:bg-panel2/50">
-              <td className="px-3 py-2 text-gray-500 tabular-nums">{i + 1}</td>
-              <td className="px-3 py-2 text-gray-100">
-                {r.name}
-                {r.active && (
-                  <span className="ml-2 text-[9px] text-green-400 font-bold">
-                    ACTIVE
-                  </span>
-                )}
-              </td>
-              <td className="px-2 py-2 text-gray-300">{r.position}</td>
-              <td className="px-2 py-2 text-right tabular-nums text-gray-300">
-                {r.ovr}
-              </td>
-              <td className="px-3 py-2 text-right tabular-nums">
-                {r.played ? (
-                  <span className="text-accent font-bold">{r.pointsToday}</span>
-                ) : (
-                  <span className="text-gray-600">—</span>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="space-y-4">
+      {hitters.length > 0 && (
+        <div className="rounded-xl border border-edge overflow-hidden">
+          <div className="bg-panel2/70 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-widest text-gray-400 border-b border-edge">
+            Hitters
+          </div>
+          <table className="w-full text-sm">
+            {thead}
+            <tbody>{renderRows(hitters)}</tbody>
+          </table>
+        </div>
+      )}
+      {pitchers.length > 0 && (
+        <div className="rounded-xl border border-edge overflow-hidden">
+          <div className="bg-panel2/70 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-widest text-gray-400 border-b border-edge">
+            Pitchers
+          </div>
+          <table className="w-full text-sm">
+            {thead}
+            <tbody>{renderRows(pitchers)}</tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

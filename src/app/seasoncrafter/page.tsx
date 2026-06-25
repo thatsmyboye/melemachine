@@ -15,6 +15,9 @@ interface Season {
   year: number;
   team: string;
   gamesPlayed: number;
+  hasHitting: boolean;
+  hasPitching: boolean;
+  pitchIP: number;
 }
 
 interface HitterRatings {
@@ -508,6 +511,8 @@ function ForwardSearch() {
   const [selectedPlayer, setSelectedPlayer] = useState<PlayerResult | null>(null);
   const [seasons, setSeasons] = useState<Season[]>([]);
   const [selectedYear, setSelectedYear] = useState<number | null>(null);
+  // null = use player's primary position; "pitcher" / "hitter" = explicit override
+  const [roleOverride, setRoleOverride] = useState<"pitcher" | "hitter" | null>(null);
   const [result, setResult] = useState<ProjectResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingSeasons, setLoadingSeasons] = useState(false);
@@ -540,19 +545,33 @@ function ForwardSearch() {
     setSuggestions([]);
     setSeasons([]);
     setSelectedYear(null);
+    setRoleOverride(null);
     setResult(null);
     setErr(null);
 
     setLoadingSeasons(true);
     try {
-      const res = await fetch(
-        `/api/seasoncrafter/seasons?playerId=${p.id}&isPitcher=${p.isPitcher ? "1" : "0"}`
-      );
+      const res = await fetch(`/api/seasoncrafter/seasons?playerId=${p.id}`);
       const data = await res.json();
       setSeasons(data.seasons ?? []);
     } catch { setErr("Could not load seasons"); }
     finally { setLoadingSeasons(false); }
   };
+
+  const seasonForYear = seasons.find((s) => s.year === selectedYear);
+
+  // Determine effective pitcher flag: explicit override > player's primary position
+  const effectiveIsPitcher =
+    roleOverride === "pitcher" ? true
+    : roleOverride === "hitter" ? false
+    : selectedPlayer?.isPitcher ?? false;
+
+  // A season is "two-way" when it has both meaningful hitting and meaningful pitching.
+  const isTwoWaySeason =
+    seasonForYear != null &&
+    seasonForYear.hasHitting &&
+    seasonForYear.hasPitching &&
+    seasonForYear.pitchIP >= 10;
 
   const project = async () => {
     if (!selectedPlayer || !selectedYear) return;
@@ -563,7 +582,7 @@ function ForwardSearch() {
       const params = new URLSearchParams({
         playerId: String(selectedPlayer.id),
         year: String(selectedYear),
-        isPitcher: selectedPlayer.isPitcher ? "1" : "0",
+        isPitcher: effectiveIsPitcher ? "1" : "0",
         position: selectedPlayer.position,
         name: selectedPlayer.name,
       });
@@ -574,8 +593,6 @@ function ForwardSearch() {
     } catch { setErr("Projection failed"); }
     finally { setProjecting(false); }
   };
-
-  const seasonForYear = seasons.find((s) => s.year === selectedYear);
 
   return (
     <div className="space-y-5">
@@ -590,7 +607,7 @@ function ForwardSearch() {
             ref={inputRef}
             type="text"
             value={query}
-            onChange={(e) => { setQuery(e.target.value); if (selectedPlayer) { setSelectedPlayer(null); setSeasons([]); setResult(null); } }}
+            onChange={(e) => { setQuery(e.target.value); if (selectedPlayer) { setSelectedPlayer(null); setSeasons([]); setRoleOverride(null); setResult(null); } }}
             onFocus={() => suggestions.length > 0 && setShowSugg(true)}
             onBlur={() => setTimeout(() => setShowSugg(false), 150)}
             placeholder="Search player name… (e.g. Babe Ruth, Mike Trout)"
@@ -633,8 +650,18 @@ function ForwardSearch() {
                   {seasons.map((s) => (
                     <button
                       key={s.year}
-                      onClick={() => setSelectedYear(s.year)}
-                      title={`${s.team} · ${s.gamesPlayed}G`}
+                      onClick={() => {
+                        setSelectedYear(s.year);
+                        setResult(null);
+                        // Auto-default non-pitchers to pitcher mode when they have a
+                        // substantial pitching workload that season (starter-level IP).
+                        if (!selectedPlayer?.isPitcher && s.pitchIP >= 100) {
+                          setRoleOverride("pitcher");
+                        } else {
+                          setRoleOverride(null);
+                        }
+                      }}
+                      title={`${s.team} · ${s.gamesPlayed}G${s.pitchIP >= 10 ? ` · ${s.pitchIP.toFixed(1)} IP` : ""}`}
                       className={`px-2.5 py-1 rounded-md text-xs border transition-colors ${
                         selectedYear === s.year
                           ? "border-accent bg-accent/15 text-accent"
@@ -648,12 +675,44 @@ function ForwardSearch() {
                 {seasonForYear && (
                   <p className="text-[11px] text-gray-500">
                     {seasonForYear.team} · {seasonForYear.gamesPlayed} games
+                    {seasonForYear.pitchIP >= 10 && (
+                      <> · {seasonForYear.pitchIP.toFixed(1)} IP</>
+                    )}
                   </p>
                 )}
               </div>
             ) : (
               <p className="text-sm text-gray-600">No seasons found for this player.</p>
             )}
+          </div>
+        )}
+
+        {/* Two-way player role toggle */}
+        {isTwoWaySeason && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-400">Project as:</span>
+            <div className="inline-flex rounded-md border border-edge overflow-hidden text-xs">
+              <button
+                onClick={() => setRoleOverride("pitcher")}
+                className={`px-3 py-1 transition-colors ${
+                  effectiveIsPitcher
+                    ? "bg-accent/15 text-accent border-r border-edge"
+                    : "text-gray-400 hover:bg-panel2 border-r border-edge"
+                }`}
+              >
+                Pitcher
+              </button>
+              <button
+                onClick={() => setRoleOverride("hitter")}
+                className={`px-3 py-1 transition-colors ${
+                  !effectiveIsPitcher
+                    ? "bg-accent/15 text-accent"
+                    : "text-gray-400 hover:bg-panel2"
+                }`}
+              >
+                Hitter
+              </button>
+            </div>
           </div>
         )}
 

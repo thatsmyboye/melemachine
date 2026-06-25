@@ -14,7 +14,7 @@ export interface HitterScoring {
   triple: number;
   hr: number;
   threePlusHrBonus: number; // flat bonus for 3+ HR in a game
-  fourPlusHitEach: number; // per-hit bonus when 4+ hits in a game
+  fourPlusHitEach: number; // bonus for each hit at/beyond the 4th (4th, 5th, ...)
   run: number;
   rbi: number;
   bbHbp: number;
@@ -102,7 +102,8 @@ export function scoreHitterLine(line: HitterLine, s = PP_SCORING.hitter): number
     line.sb * s.sb +
     line.cs * s.cs;
   if (line.hr >= 3) pts += s.threePlusHrBonus;
-  if (line.h >= 4) pts += line.h * s.fourPlusHitEach;
+  // 25 PP for each hit at or beyond the 4th (4th, 5th, 6th, ...).
+  if (line.h >= 4) pts += (line.h - 3) * s.fourPlusHitEach;
   return Math.round(pts * 10) / 10;
 }
 

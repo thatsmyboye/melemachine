@@ -26,4 +26,4 @@ The compiled JSON files are committed to the repo. Re-run `npm run history` only
 ## License
 
 The Lahman Baseball Database is released under a Creative Commons Attribution-ShareAlike 3.0 Unported License.
-http://www.seanlahman.com/baseball-archive/statistics/
+https://sabr.org/lahman-database/

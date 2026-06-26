@@ -21,6 +21,45 @@ import type {
 } from "./mlbhistory";
 import { tierFromOvr } from "./encodings";
 
+// ── Card-pool calibration contexts ───────────────────────────────────────────
+// Each entry is [mean, std] of that rating across the current card pool.
+// When absent, projection falls back to the fixed z-score baseline (center=125,
+// spread=33). Route handlers supply these from carddist.ts.
+
+export interface HitCardDist {
+  contact:     [number, number];
+  gap:         [number, number];
+  power:       [number, number];
+  eye:         [number, number];
+  avoidK:      [number, number];
+  babip:       [number, number];
+  speed:       [number, number];
+  stealing:    [number, number];
+  baserunning: [number, number];
+  sacBunt:     [number, number];
+  buntForHit:  [number, number];
+  ifRange:     [number, number];
+  ifError:     [number, number];
+  ifArm:       [number, number];
+  turnDP:      [number, number];
+  ofRange:     [number, number];
+  ofError:     [number, number];
+  ofArm:       [number, number];
+  cAbility:    [number, number];
+  cFraming:    [number, number];
+  cArm:        [number, number];
+}
+
+export interface PitchCardDist {
+  stuff:    [number, number];
+  movement: [number, number];
+  control:  [number, number];
+  pHR:      [number, number];
+  pBABIP:   [number, number];
+  stamina:  [number, number];
+  hold:     [number, number];
+}
+
 // ── OOTP-scale ratings, 1-250 ─────────────────────────────────────────────
 
 export interface HitterRatings {
@@ -86,9 +125,24 @@ function std(arr: number[]): number {
   return Math.sqrt(v) || 1;
 }
 
-/** Convert a z-score to OOTP 1-250 rating. League average → 125. */
+/** Convert a z-score to OOTP 1-250 rating using fixed baseline (center=125, spread=33). */
 function zr(z: number): number {
   return Math.max(20, Math.min(250, Math.round(125 + z * 33)));
+}
+
+/**
+ * Convert a z-score to OOTP 1-250 using the card pool's [mean, std] for this
+ * rating dimension.  Automatically tracks power creep; falls back to the fixed
+ * baseline when no distribution is supplied.
+ */
+function zrCal(dist: [number, number] | undefined, z: number): number {
+  const [m, s] = dist ?? [125, 33];
+  return Math.max(20, Math.min(250, Math.round(m + z * s)));
+}
+
+/** Reverse a rating on the standard 1-250 scale back to a z-score. */
+function ratingToZ(r: number): number {
+  return (r - 125) / 33;
 }
 
 function babip(hits: number, hr: number, ab: number, so: number): number {
@@ -264,7 +318,9 @@ function z([m, s]: [number, number], val: number) {
 
 export function projectHitterRatings(
   stats: SeasonHitStats,
-  league: HitLeague
+  league: HitLeague,
+  fielding?: { fr?: number; ferr?: number; farm?: number },
+  cd?: HitCardDist | null
 ): HitterRatings {
   const d = hitRates(stats);
 
@@ -287,41 +343,49 @@ export function projectHitterRatings(
     : z(league.sbPerGame, d.sbPerGame);
   const baserunZ = 0.6 * speedZ + 0.4 * stealingZ;
 
-  // Fielding: rough proxy from speed + generic average
-  // Specific defensive metrics (UZR/DRS) are not available from this API;
-  // fielding ratings are marked accordingly in the UI.
-  // Multiplier of 10 (vs the full 33 used in zr) dampens the speed→fielding
-  // correlation to avoid over-crediting pure baserunning speed as defence.
-  const fieldBase = Math.max(20, Math.min(250, Math.round(125 + speedZ * 10)));
+  // Fielding z-scores: Lahman-derived fr/ferr/farm are on the standard
+  // 1-250 scale (center 125, spread 33). Convert back to z before re-mapping
+  // through the card-pool distribution so calibration applies uniformly.
+  const fieldRangeZ = fielding?.fr   !== undefined
+    ? ratingToZ(fielding.fr)
+    : speedZ * 0.3; // speed is a weak proxy when no fielding data
+  const fieldErrorZ = fielding?.ferr !== undefined
+    ? ratingToZ(fielding.ferr)
+    : speedZ * 0.3;
+  const fieldArmZ   = fielding?.farm !== undefined
+    ? ratingToZ(fielding.farm)
+    : 0; // neutral when arm data is absent
 
   return {
-    contact: zr(contactZ),
-    gap: zr(gapZ),
-    power: zr(powerZ),
-    eye: zr(eyeZ),
-    avoidK: zr(avoidKZ),
-    babip: zr(babipZ),
-    speed: zr(speedZ),
-    stealing: zr(stealingZ),
-    baserunning: zr(baserunZ),
-    sacBunt: 100,
-    buntForHit: Math.max(20, Math.min(250, Math.round(125 + speedZ * 20))),
-    ifRange: fieldBase,
-    ifError: fieldBase,
-    ifArm: 100,
-    turnDP: 100,
-    ofRange: fieldBase,
-    ofError: fieldBase,
-    ofArm: 100,
-    cAbility: 100,
-    cFraming: 100,
-    cArm: 100,
+    contact:     zrCal(cd?.contact,     contactZ),
+    gap:         zrCal(cd?.gap,         gapZ),
+    power:       zrCal(cd?.power,       powerZ),
+    eye:         zrCal(cd?.eye,         eyeZ),
+    avoidK:      zrCal(cd?.avoidK,      avoidKZ),
+    babip:       zrCal(cd?.babip,       babipZ),
+    speed:       zrCal(cd?.speed,       speedZ),
+    stealing:    zrCal(cd?.stealing,    stealingZ),
+    baserunning: zrCal(cd?.baserunning, baserunZ),
+    // No per-player bunt metric exists; use card-pool mean (or fixed neutral).
+    sacBunt:     cd ? Math.round(cd.sacBunt[0]) : 100,
+    buntForHit:  zrCal(cd?.buntForHit, speedZ * 0.6),
+    ifRange:     zrCal(cd?.ifRange,    fieldRangeZ),
+    ifError:     zrCal(cd?.ifError,    fieldErrorZ),
+    ifArm:       zrCal(cd?.ifArm,      fieldArmZ),
+    turnDP:      cd ? Math.round(cd.turnDP[0]) : 100,
+    ofRange:     zrCal(cd?.ofRange,    fieldRangeZ),
+    ofError:     zrCal(cd?.ofError,    fieldErrorZ),
+    ofArm:       zrCal(cd?.ofArm,      fieldArmZ),
+    cAbility:    zrCal(cd?.cAbility,   fieldRangeZ),
+    cFraming:    cd ? Math.round(cd.cFraming[0]) : 100,
+    cArm:        zrCal(cd?.cArm,       fieldArmZ),
   };
 }
 
 export function projectHitterSplitRatings(
   split: HitSplitLine,
-  league: HitLeague
+  league: HitLeague,
+  cd?: HitCardDist | null
 ): Partial<HitterRatings> {
   if (split.pa < 25) return {};
   const s: SeasonHitStats = {
@@ -342,7 +406,7 @@ export function projectHitterSplitRatings(
     obp: split.obp,
     slg: split.slg,
   };
-  const r = projectHitterRatings(s, league);
+  const r = projectHitterRatings(s, league, undefined, cd);
   return {
     contact: r.contact,
     gap: r.gap,
@@ -355,7 +419,8 @@ export function projectHitterSplitRatings(
 
 export function projectPitcherRatings(
   stats: SeasonPitchStats,
-  league: PitchLeague
+  league: PitchLeague,
+  cd?: PitchCardDist | null
 ): PitcherRatings {
   const d = pitchRates(stats);
   const isStarter = stats.gamesStarted >= stats.gamesPlayed * 0.5;
@@ -373,19 +438,20 @@ export function projectPitcherRatings(
     : -1.5; // relievers intentionally low stamina
 
   return {
-    stuff: zr(stuffZ),
-    movement: zr(movementZ),
-    control: zr(controlZ),
-    pHR: zr(pHRZ),
-    pBABIP: zr(pBABIPZ),
-    stamina: zr(staminaZ),
-    hold: zr(controlZ * 0.6), // proxy
+    stuff:    zrCal(cd?.stuff,    stuffZ),
+    movement: zrCal(cd?.movement, movementZ),
+    control:  zrCal(cd?.control,  controlZ),
+    pHR:      zrCal(cd?.pHR,      pHRZ),
+    pBABIP:   zrCal(cd?.pBABIP,   pBABIPZ),
+    stamina:  zrCal(cd?.stamina,  staminaZ),
+    hold:     zrCal(cd?.hold,     controlZ * 0.6), // proxy
   };
 }
 
 export function projectPitcherSplitRatings(
   split: PitchSplitLine,
-  league: PitchLeague
+  league: PitchLeague,
+  cd?: PitchCardDist | null
 ): Partial<PitcherRatings> {
   if (split.ip < 10) return {};
   const s: SeasonPitchStats = {
@@ -401,13 +467,13 @@ export function projectPitcherSplitRatings(
     era: split.era,
     whip: split.whip,
   };
-  const r = projectPitcherRatings(s, league);
+  const r = projectPitcherRatings(s, league, cd);
   return {
-    stuff: r.stuff,
+    stuff:    r.stuff,
     movement: r.movement,
-    control: r.control,
-    pHR: r.pHR,
-    pBABIP: r.pBABIP,
+    control:  r.control,
+    pHR:      r.pHR,
+    pBABIP:   r.pBABIP,
   };
 }
 
@@ -454,7 +520,9 @@ export function estimateHitterOvr(ratings: HitterRatings, position: string): num
   }
 
   const total = offense * 0.72 + baserunning * 0.08 + defense * 0.20;
-  // Map engine 0-100 → OVR 60-105
+  // OVR is derived from norm(rating) values, which are already anchored to the
+  // card pool when cd was supplied.  The formula below maps the 0-100 total to
+  // an OVR range that is implicitly calibrated through those ratings.
   return Math.max(60, Math.min(105, Math.round(48 + total * 0.58)));
 }
 
@@ -480,10 +548,11 @@ export function buildHitterCard(
   stats: SeasonHitStats,
   leaguePlayers: LeagueHitter[],
   splits: { vsLeft: HitSplitLine | null; vsRight: HitSplitLine | null },
-  position: string
+  position: string,
+  cd?: HitCardDist | null
 ): ProjectedCard {
   const league = computeHitLeague(leaguePlayers);
-  const hitter = projectHitterRatings(stats, league);
+  const hitter = projectHitterRatings(stats, league, undefined, cd);
   const ovr = estimateHitterOvr(hitter, position);
 
   return {
@@ -493,10 +562,10 @@ export function buildHitterCard(
     isStarter: false,
     hitter,
     hitterVL: splits.vsLeft
-      ? projectHitterSplitRatings(splits.vsLeft, league)
+      ? projectHitterSplitRatings(splits.vsLeft, league, cd)
       : undefined,
     hitterVR: splits.vsRight
-      ? projectHitterSplitRatings(splits.vsRight, league)
+      ? projectHitterSplitRatings(splits.vsRight, league, cd)
       : undefined,
     leagueContextAvailable: leaguePlayers.length >= 20,
   };
@@ -505,10 +574,11 @@ export function buildHitterCard(
 export function buildPitcherCard(
   stats: SeasonPitchStats,
   leaguePitchers: LeaguePitcher[],
-  splits: { vsLeft: PitchSplitLine | null; vsRight: PitchSplitLine | null }
+  splits: { vsLeft: PitchSplitLine | null; vsRight: PitchSplitLine | null },
+  cd?: PitchCardDist | null
 ): ProjectedCard {
   const league = computePitchLeague(leaguePitchers);
-  const pitcher = projectPitcherRatings(stats, league);
+  const pitcher = projectPitcherRatings(stats, league, cd);
   const isStarter = stats.gamesStarted >= stats.gamesPlayed * 0.5;
   const ovr = estimatePitcherOvr(pitcher, isStarter);
 
@@ -519,10 +589,10 @@ export function buildPitcherCard(
     isStarter,
     pitcher,
     pitcherVL: splits.vsLeft
-      ? projectPitcherSplitRatings(splits.vsLeft, league)
+      ? projectPitcherSplitRatings(splits.vsLeft, league, cd)
       : undefined,
     pitcherVR: splits.vsRight
-      ? projectPitcherSplitRatings(splits.vsRight, league)
+      ? projectPitcherSplitRatings(splits.vsRight, league, cd)
       : undefined,
     leagueContextAvailable: leaguePitchers.length >= 20,
   };

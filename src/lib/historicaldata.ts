@@ -24,6 +24,11 @@ interface HistHit {
   avg: number;
   obp: number;
   slg: number;
+  // Pre-computed fielding ratings (1-250), normalized vs. position+era peers.
+  // Absent for pitchers, DH, or records with insufficient fielding data.
+  fr?: number;   // range
+  ferr?: number; // error avoidance
+  farm?: number; // arm strength
 }
 
 interface HistPit {
@@ -99,6 +104,9 @@ export function getStaticLeagueHitters(year: number): LeagueHitter[] {
       avg: r.avg,
       obp: r.obp,
       slg: r.slg,
+      fr:   r.fr,
+      ferr: r.ferr,
+      farm: r.farm,
     }));
 }
 

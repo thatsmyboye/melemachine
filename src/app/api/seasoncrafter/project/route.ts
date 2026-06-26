@@ -8,6 +8,7 @@ import {
   getLeaguePitchers,
 } from "@/lib/mlbhistory";
 import { buildHitterCard, buildPitcherCard } from "@/lib/seasoncrafter";
+import { getHitCardDist, getPitchCardDist } from "@/lib/carddist";
 import { getAllCards } from "@/lib/data";
 
 export const dynamic = "force-dynamic";
@@ -49,7 +50,7 @@ export async function GET(req: Request) {
         );
       }
 
-      const card = buildPitcherCard(stats, lgPitchers, splits);
+      const card = buildPitcherCard(stats, lgPitchers, splits, getPitchCardDist());
 
       // Find cards already in the pool with this player+year
       const existingCards = getAllCards().filter(
@@ -115,7 +116,7 @@ export async function GET(req: Request) {
         );
       }
 
-      const card = buildHitterCard(stats, lgHitters, splits, position);
+      const card = buildHitterCard(stats, lgHitters, splits, position, getHitCardDist());
 
       const existingCards = getAllCards().filter(
         (c) =>

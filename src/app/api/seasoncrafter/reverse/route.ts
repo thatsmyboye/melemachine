@@ -13,6 +13,7 @@ import {
   estimateHitterOvr,
   estimatePitcherOvr,
 } from "@/lib/seasoncrafter";
+import { getHitCardDist, getPitchCardDist } from "@/lib/carddist";
 import { tierFromOvr } from "@/lib/encodings";
 import { getAllCards } from "@/lib/data";
 import type { Tier } from "@/lib/types";
@@ -72,10 +73,11 @@ export async function GET(req: Request) {
         : await getLeaguePitchers(year);
       const league = computePitchLeague(pitchers);
 
+      const pitchDist = getPitchCardDist();
       const results = pitchers
         .filter((p) => p.ip >= 40)
         .map((p) => {
-          const ratings = projectPitcherRatings(p, league);
+          const ratings = projectPitcherRatings(p, league, pitchDist);
           const isStarter = p.gamesStarted >= p.gamesPlayed * 0.5;
           const ovr = estimatePitcherOvr(ratings, isStarter);
           const projTier = tierFromOvr(ovr);
@@ -127,11 +129,12 @@ export async function GET(req: Request) {
 
       const candidates = position === "ALL" ? hitters : hitters.filter((h) => posFilter(h.position));
 
+      const hitDist = getHitCardDist();
       const results = candidates
         .filter((p) => p.pa >= 150)
         .map((p) => {
           const s = { ...p, rbi: 0, hbp: p.hbp ?? 0, gamesPlayed: p.gamesPlayed };
-          const ratings = projectHitterRatings(s, league, { fr: p.fr, ferr: p.ferr, farm: p.farm });
+          const ratings = projectHitterRatings(s, league, { fr: p.fr, ferr: p.ferr, farm: p.farm }, hitDist);
           const ovr = estimateHitterOvr(ratings, p.position || position);
           const projTier = tierFromOvr(ovr);
           const key = normName(p.name) + "|" + year;

@@ -131,7 +131,7 @@ export async function GET(req: Request) {
         .filter((p) => p.pa >= 150)
         .map((p) => {
           const s = { ...p, rbi: 0, hbp: p.hbp ?? 0, gamesPlayed: p.gamesPlayed };
-          const ratings = projectHitterRatings(s, league);
+          const ratings = projectHitterRatings(s, league, { fr: p.fr, ferr: p.ferr, farm: p.farm });
           const ovr = estimateHitterOvr(ratings, p.position || position);
           const projTier = tierFromOvr(ovr);
           const key = normName(p.name) + "|" + year;

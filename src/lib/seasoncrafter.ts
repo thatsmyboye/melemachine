@@ -264,7 +264,8 @@ function z([m, s]: [number, number], val: number) {
 
 export function projectHitterRatings(
   stats: SeasonHitStats,
-  league: HitLeague
+  league: HitLeague,
+  fielding?: { fr?: number; ferr?: number; farm?: number }
 ): HitterRatings {
   const d = hitRates(stats);
 
@@ -287,12 +288,15 @@ export function projectHitterRatings(
     : z(league.sbPerGame, d.sbPerGame);
   const baserunZ = 0.6 * speedZ + 0.4 * stealingZ;
 
-  // Fielding: rough proxy from speed + generic average
-  // Specific defensive metrics (UZR/DRS) are not available from this API;
-  // fielding ratings are marked accordingly in the UI.
+  // Fielding: use Lahman-derived ratings when available (reverse search via
+  // static dataset). When absent (MLB Stats API path or insufficient data),
+  // fall back to the speed proxy so the UI always gets a plausible value.
   // Multiplier of 10 (vs the full 33 used in zr) dampens the speed→fielding
   // correlation to avoid over-crediting pure baserunning speed as defence.
   const fieldBase = Math.max(20, Math.min(250, Math.round(125 + speedZ * 10)));
+  const fieldRange = fielding?.fr   ?? fieldBase;
+  const fieldError = fielding?.ferr ?? fieldBase;
+  const fieldArm   = fielding?.farm ?? 100;
 
   return {
     contact: zr(contactZ),
@@ -306,16 +310,16 @@ export function projectHitterRatings(
     baserunning: zr(baserunZ),
     sacBunt: 100,
     buntForHit: Math.max(20, Math.min(250, Math.round(125 + speedZ * 20))),
-    ifRange: fieldBase,
-    ifError: fieldBase,
-    ifArm: 100,
+    ifRange: fieldRange,
+    ifError: fieldError,
+    ifArm: fieldArm,
     turnDP: 100,
-    ofRange: fieldBase,
-    ofError: fieldBase,
-    ofArm: 100,
-    cAbility: 100,
+    ofRange: fieldRange,
+    ofError: fieldError,
+    ofArm: fieldArm,
+    cAbility: fieldRange,
     cFraming: 100,
-    cArm: 100,
+    cArm: fieldArm,
   };
 }
 

@@ -157,10 +157,18 @@ interface HistHit {
   d: number; t: number; hr: number; bb: number;
   hbp: number; so: number; sb: number; cs: number;
   avg: number; obp: number; slg: number;
+  // Lahman fielding ratings (1-250), pre-normalized against position+era peers.
+  // Absent when fielding data is unavailable (pitchers, DH, very old records).
+  fr?: number;   // range (RF/9 percentile)
+  ferr?: number; // errors (error-rate percentile, higher = fewer errors)
+  farm?: number; // arm strength (assists/9 or CS% for catchers)
 }
 
+// Track playerID alongside rows so we can join fielding data later.
+const hitRowPids: string[] = [];
 const hitRows: HistHit[] = [];
-for (const a of hitAgg.values()) {
+for (const [key, a] of hitAgg.entries()) {
+  const pid = key.split("|")[0];
   if (a.ab < 50) continue; // skip tiny samples
   const pa = a.ab + a.bb + a.hbp + a.sf + a.sh;
   if (pa < 80) continue;
@@ -190,9 +198,123 @@ for (const a of hitAgg.values()) {
     obp: r3(obp),
     slg: r3(slg),
   });
+  hitRowPids.push(pid);
 }
 
 console.log(`  ${hitRows.length} qualified hitter seasons`);
+
+// ── Fielding ──────────────────────────────────────────────────────────────
+
+console.log("Reading Fielding.csv…");
+const fielding = readCsv("Fielding.csv");
+
+// Skip positions where fielding metrics are irrelevant for rating purposes.
+const SKIP_POS = new Set(["P", "DH", ""]);
+
+interface FieldEntry { po: number; a: number; e: number; inn: number; sb: number; cs: number; }
+
+// Aggregate by playerID|yearID|POS across stints.
+const fieldByKey = new Map<string, FieldEntry>();
+for (const row of fielding) {
+  const pos = row.POS ?? "";
+  if (SKIP_POS.has(pos)) continue;
+  const key = `${row.playerID}|${row.yearID}|${pos}`;
+  if (!fieldByKey.has(key)) fieldByKey.set(key, { po: 0, a: 0, e: 0, inn: 0, sb: 0, cs: 0 });
+  const f = fieldByKey.get(key)!;
+  f.po += n(row.PO);
+  f.a  += n(row.A);
+  f.e  += n(row.E);
+  // InnOuts: outs recorded while the player was on the field (InnOuts/3 = innings).
+  // Pre-1956 records often lack InnOuts; fall back to games × 9 as a rough proxy.
+  const rawInn = n(row.InnOuts);
+  f.inn += rawInn > 0 ? rawInn / 3 : n(row.G) * 9;
+  f.sb += n(row.SB);  // runners who stole on catcher
+  f.cs += n(row.CS);  // runners caught stealing by catcher
+}
+
+const MIN_FIELD_INN = 20; // discard tiny fielding samples
+
+// For each year+position pair, collect the metric distributions so we can
+// normalize each player's numbers against their positional peers in that era.
+interface FieldDist { rf9: number[]; errRate: number[]; arm: number[]; }
+const yearPosDist = new Map<string, FieldDist>();
+
+for (const [key, f] of fieldByKey) {
+  if (f.inn < MIN_FIELD_INN) continue;
+  const [, yr, pos] = key.split("|");
+  const ypk = `${yr}|${pos}`;
+  if (!yearPosDist.has(ypk)) yearPosDist.set(ypk, { rf9: [], errRate: [], arm: [] });
+  const d = yearPosDist.get(ypk)!;
+  d.rf9.push((f.po + f.a) / f.inn * 9);
+  const tot = f.po + f.a + f.e;
+  d.errRate.push(tot > 0 ? f.e / tot : 0);
+  // Arm proxy: assists per 9 innings for IF/OF; CS% for catchers.
+  if (pos === "C") {
+    const att = f.sb + f.cs;
+    d.arm.push(att >= 5 ? f.cs / att : -1); // -1 flags insufficient sample
+  } else {
+    d.arm.push(f.a / f.inn * 9);
+  }
+}
+
+// Pre-compute [mean, std] for each distribution so z-scores are fast at lookup.
+function fldMs(arr: number[]): [number, number] {
+  const valid = arr.filter(v => v >= 0);
+  if (valid.length < 5) return [0, 1];
+  const m = valid.reduce((s, v) => s + v, 0) / valid.length;
+  const v = valid.reduce((s, x) => s + (x - m) ** 2, 0) / valid.length;
+  return [m, Math.sqrt(v) || 1];
+}
+
+interface FieldDistStats { rf9: [number, number]; errRate: [number, number]; arm: [number, number]; }
+const distStats = new Map<string, FieldDistStats>();
+for (const [ypk, d] of yearPosDist) {
+  distStats.set(ypk, {
+    rf9:     fldMs(d.rf9),
+    errRate: fldMs(d.errRate),
+    arm:     fldMs(d.arm),
+  });
+}
+
+function fldZ([m, s]: [number, number], val: number): number { return (val - m) / s; }
+function zrFld(z: number): number { return Math.max(20, Math.min(250, Math.round(125 + z * 33))); }
+
+// Join fielding ratings onto each hit row.
+let fieldedCount = 0;
+for (let i = 0; i < hitRows.length; i++) {
+  const row = hitRows[i];
+  const pid  = hitRowPids[i];
+  const pos  = row.p;
+  if (!pos || SKIP_POS.has(pos) || pos === "?") continue;
+
+  const f = fieldByKey.get(`${pid}|${row.y}|${pos}`);
+  if (!f || f.inn < MIN_FIELD_INN) continue;
+
+  const ds = distStats.get(`${row.y}|${pos}`);
+  if (!ds) continue;
+
+  const rf9     = (f.po + f.a) / f.inn * 9;
+  const tot     = f.po + f.a + f.e;
+  const errRate = tot > 0 ? f.e / tot : 0;
+
+  row.fr   = zrFld( fldZ(ds.rf9,     rf9));
+  row.ferr = zrFld(-fldZ(ds.errRate, errRate)); // lower error rate → higher rating
+
+  // Arm: CS% for catchers, assists/9 for everyone else.
+  if (pos === "C") {
+    const att = f.sb + f.cs;
+    if (att >= 10) {
+      row.farm = zrFld(fldZ(ds.arm, f.cs / att));
+    }
+  } else {
+    const arm9 = f.a / f.inn * 9;
+    row.farm = zrFld(fldZ(ds.arm, arm9));
+  }
+
+  fieldedCount++;
+}
+
+console.log(`  ${fieldedCount} hitter seasons with fielding data`);
 
 // ── Pitching ──────────────────────────────────────────────────────────────
 

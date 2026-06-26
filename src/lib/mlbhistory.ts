@@ -385,6 +385,10 @@ export interface LeagueHitter {
   avg: number;
   obp: number;
   slg: number;
+  // Lahman fielding ratings (1-250), present only for static-dataset hitters.
+  fr?: number;   // range
+  ferr?: number; // error avoidance
+  farm?: number; // arm strength
 }
 
 export async function getLeagueHitters(year: number): Promise<LeagueHitter[]> {

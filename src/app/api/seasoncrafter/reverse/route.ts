@@ -13,7 +13,6 @@ import {
   estimateHitterOvr,
   estimatePitcherOvr,
 } from "@/lib/seasoncrafter";
-import { getHitCardDist, getPitchCardDist } from "@/lib/carddist";
 import { tierFromOvr } from "@/lib/encodings";
 import { getAllCards } from "@/lib/data";
 import type { Tier } from "@/lib/types";
@@ -73,11 +72,19 @@ export async function GET(req: Request) {
         : await getLeaguePitchers(year);
       const league = computePitchLeague(pitchers);
 
-      const pitchDist = getPitchCardDist();
+      // Do not use card-pool calibration for reverse search — calibrated distributions
+      // anchored to a low-tier pool compress all projections into Bronze. Use the
+      // fixed baseline (center=125, spread=33) so tier distribution is accurate.
       const results = pitchers
-        .filter((p) => p.ip >= 40)
+        .filter((p) => {
+          if (p.ip < 25) return false;
+          const isStarter = p.gamesStarted >= p.gamesPlayed * 0.5;
+          if (position === "SP") return isStarter;
+          if (position === "RP") return !isStarter;
+          return true; // "P" — include both
+        })
         .map((p) => {
-          const ratings = projectPitcherRatings(p, league, pitchDist);
+          const ratings = projectPitcherRatings(p, league, null);
           const isStarter = p.gamesStarted >= p.gamesPlayed * 0.5;
           const ovr = estimatePitcherOvr(ratings, isStarter);
           const projTier = tierFromOvr(ovr);
@@ -129,12 +136,12 @@ export async function GET(req: Request) {
 
       const candidates = position === "ALL" ? hitters : hitters.filter((h) => posFilter(h.position));
 
-      const hitDist = getHitCardDist();
+      // Do not use card-pool calibration for reverse search (see pitcher note above).
       const results = candidates
-        .filter((p) => p.pa >= 150)
+        .filter((p) => p.pa >= 50)
         .map((p) => {
           const s = { ...p, rbi: 0, hbp: p.hbp ?? 0, gamesPlayed: p.gamesPlayed };
-          const ratings = projectHitterRatings(s, league, { fr: p.fr, ferr: p.ferr, farm: p.farm }, hitDist);
+          const ratings = projectHitterRatings(s, league, { fr: p.fr, ferr: p.ferr, farm: p.farm }, null);
           const ovr = estimateHitterOvr(ratings, p.position || position);
           const projTier = tierFromOvr(ovr);
           const key = normName(p.name) + "|" + year;

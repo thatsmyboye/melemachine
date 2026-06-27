@@ -27,7 +27,15 @@ export async function GET(req: Request) {
   const withStats = searchParams.get("stats") !== "0";
 
   const collection = getCollection();
-  const liveCards = collection.filter((c) => c.isLive);
+  // De-dupe: keep the highest-OVR live card per player name.
+  const liveByName = new Map<string, typeof collection[0]>();
+  for (const c of collection) {
+    if (!c.isLive) continue;
+    const key = normName(c.name);
+    const existing = liveByName.get(key);
+    if (!existing || c.ovr > existing.ovr) liveByName.set(key, c);
+  }
+  const liveCards = [...liveByName.values()];
 
   let games;
   try {

@@ -10,23 +10,30 @@ import {
   computePitchLeague,
   projectHitterRatings,
   projectPitcherRatings,
-  estimateHitterOvr,
-  estimatePitcherOvr,
+  hitterCompositeScore,
+  pitcherCompositeScore,
+  buildTierBands,
+  calibrateToPool,
+  DEFAULT_TIER_BANDS,
 } from "@/lib/seasoncrafter";
-import { tierFromOvr } from "@/lib/encodings";
 import { getAllCards } from "@/lib/data";
 import type { Tier } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-const TIER_OVR: Record<string, [number, number]> = {
-  Iron: [0, 59],
-  Bronze: [60, 69],
-  Silver: [70, 79],
-  Gold: [80, 89],
-  Diamond: [90, 99],
-  Perfect: [100, 999],
-};
+/**
+ * Tier proportions of the live card pool (split by pitcher/hitter, since their
+ * OVR distributions differ).  Read fresh per request so the calibration tracks
+ * the weekly drift as new cards enter the pool.
+ */
+function poolTierCounts(isPitcher: boolean): Partial<Record<Tier, number>> {
+  const counts: Partial<Record<Tier, number>> = {};
+  for (const c of getAllCards()) {
+    if (c.isPitcher !== isPitcher) continue;
+    counts[c.tier] = (counts[c.tier] ?? 0) + 1;
+  }
+  return counts;
+}
 
 function normName(n: string) {
   return n
@@ -51,7 +58,9 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Missing position, tier, or year" }, { status: 400 });
   }
 
-  const [ovrMin, ovrMax] = TIER_OVR[tier] ?? [60, 999];
+  // Mirror the live card pool's tier distribution so calibrated tiers match the
+  // language of the existing pool; fall back to a fixed spread if unavailable.
+  const bands = buildTierBands(poolTierCounts(isPitcher)) ?? DEFAULT_TIER_BANDS;
 
   // Build a set of player+year combos already in the card pool
   const existing = new Set<string>();
@@ -72,26 +81,32 @@ export async function GET(req: Request) {
         : await getLeaguePitchers(year);
       const league = computePitchLeague(pitchers);
 
-      // Do not use card-pool calibration for reverse search — calibrated distributions
-      // anchored to a low-tier pool compress all projections into Bronze. Use the
-      // fixed baseline (center=125, spread=33) so tier distribution is accurate.
-      const results = pitchers
-        .filter((p) => {
-          if (p.ip < 25) return false;
-          const isStarter = p.gamesStarted >= p.gamesPlayed * 0.5;
-          if (position === "SP") return isStarter;
-          if (position === "RP") return !isStarter;
-          return true; // "P" — include both
-        })
-        .map((p) => {
-          const ratings = projectPitcherRatings(p, league, null);
-          const isStarter = p.gamesStarted >= p.gamesPlayed * 0.5;
-          const ovr = estimatePitcherOvr(ratings, isStarter);
-          const projTier = tierFromOvr(ovr);
-          const key = normName(p.name) + "|" + year;
-          return { p, ratings, ovr, tier: projTier, isStarter, inGame: existing.has(key) };
-        })
-        .filter((r) => r.tier === tier && r.ovr >= ovrMin && r.ovr <= ovrMax && !r.inGame)
+      // Project every eligible pitcher in this position group, then assign tiers
+      // by ranking them and mirroring the live card pool's tier proportions
+      // (see calibrateToPool).  Ranking the fixed-baseline projections — rather
+      // than reusing the absolute OVR formula — is what lets the upper tiers
+      // populate instead of collapsing into a single band.
+      const eligible = pitchers.filter((p) => {
+        if (p.ip < 25) return false;
+        const isStarter = p.gamesStarted >= p.gamesPlayed * 0.5;
+        if (position === "SP") return isStarter;
+        if (position === "RP") return !isStarter;
+        return true; // "P" — include both
+      });
+
+      const projected = eligible.map((p) => {
+        const ratings = projectPitcherRatings(p, league, null);
+        const isStarter = p.gamesStarted >= p.gamesPlayed * 0.5;
+        const score = pitcherCompositeScore(ratings, isStarter);
+        const key = normName(p.name) + "|" + year;
+        return { p, ratings, isStarter, score, inGame: existing.has(key) };
+      });
+
+      const calib = calibrateToPool(projected.map((x) => x.score), bands);
+
+      const results = projected
+        .map((x, i) => ({ ...x, ovr: calib[i].ovr, tier: calib[i].tier }))
+        .filter((r) => r.tier === tier && !r.inGame)
         .sort((a, b) => b.ovr - a.ovr)
         .slice(0, 30)
         .map(({ p, ratings, ovr, tier: projTier, isStarter }) => ({
@@ -136,18 +151,23 @@ export async function GET(req: Request) {
 
       const candidates = position === "ALL" ? hitters : hitters.filter((h) => posFilter(h.position));
 
-      // Do not use card-pool calibration for reverse search (see pitcher note above).
-      const results = candidates
-        .filter((p) => p.pa >= 50)
-        .map((p) => {
-          const s = { ...p, rbi: 0, hbp: p.hbp ?? 0, gamesPlayed: p.gamesPlayed };
-          const ratings = projectHitterRatings(s, league, { fr: p.fr, ferr: p.ferr, farm: p.farm }, null);
-          const ovr = estimateHitterOvr(ratings, p.position || position);
-          const projTier = tierFromOvr(ovr);
-          const key = normName(p.name) + "|" + year;
-          return { p, ratings, ovr, tier: projTier, inGame: existing.has(key) };
-        })
-        .filter((r) => r.tier === tier && r.ovr >= ovrMin && r.ovr <= ovrMax && !r.inGame)
+      // Rank the position group and mirror the live card pool's tier proportions
+      // (see calibrateToPool / pitcher note above).
+      const eligible = candidates.filter((p) => p.pa >= 50);
+
+      const projected = eligible.map((p) => {
+        const s = { ...p, rbi: 0, hbp: p.hbp ?? 0, gamesPlayed: p.gamesPlayed };
+        const ratings = projectHitterRatings(s, league, { fr: p.fr, ferr: p.ferr, farm: p.farm }, null);
+        const score = hitterCompositeScore(ratings, p.position || position);
+        const key = normName(p.name) + "|" + year;
+        return { p, ratings, score, inGame: existing.has(key) };
+      });
+
+      const calib = calibrateToPool(projected.map((x) => x.score), bands);
+
+      const results = projected
+        .map((x, i) => ({ ...x, ovr: calib[i].ovr, tier: calib[i].tier }))
+        .filter((r) => r.tier === tier && !r.inGame)
         .sort((a, b) => b.ovr - a.ovr)
         .slice(0, 30)
         .map(({ p, ratings, ovr, tier: projTier }) => ({

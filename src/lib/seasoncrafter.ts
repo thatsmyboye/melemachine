@@ -483,7 +483,13 @@ function norm(v: number) {
   return Math.max(0, Math.min(100, (v / 250) * 100));
 }
 
-export function estimateHitterOvr(ratings: HitterRatings, position: string): number {
+/**
+ * Continuous 0-100 composite of a hitter's value (offense + baserunning +
+ * position-appropriate defense).  This is the raw, pre-rounding quantity behind
+ * estimateHitterOvr; reverse search ranks candidates by it so the calibration
+ * step (calibrateToPool) has a tie-light, monotonic ordering to work with.
+ */
+export function hitterCompositeScore(ratings: HitterRatings, position: string): number {
   const offense =
     norm(ratings.contact) * 0.16 +
     norm(ratings.gap) * 0.14 +
@@ -519,14 +525,19 @@ export function estimateHitterOvr(ratings: HitterRatings, position: string): num
     defense = 40; // DH
   }
 
-  const total = offense * 0.72 + baserunning * 0.08 + defense * 0.20;
+  return offense * 0.72 + baserunning * 0.08 + defense * 0.20;
+}
+
+export function estimateHitterOvr(ratings: HitterRatings, position: string): number {
   // OVR is derived from norm(rating) values, which are already anchored to the
   // card pool when cd was supplied.  The formula below maps the 0-100 total to
   // an OVR range that is implicitly calibrated through those ratings.
+  const total = hitterCompositeScore(ratings, position);
   return Math.max(60, Math.min(105, Math.round(48 + total * 0.58)));
 }
 
-export function estimatePitcherOvr(
+/** Continuous 0-100 composite of a pitcher's value; see hitterCompositeScore. */
+export function pitcherCompositeScore(
   ratings: PitcherRatings,
   isStarter: boolean
 ): number {
@@ -538,8 +549,110 @@ export function estimatePitcherOvr(
     norm(ratings.pBABIP) * 0.12;
 
   const staminaW = isStarter ? 0.15 : 0.04;
-  const total = rp * (1 - staminaW) + norm(ratings.stamina) * staminaW;
+  return rp * (1 - staminaW) + norm(ratings.stamina) * staminaW;
+}
+
+export function estimatePitcherOvr(
+  ratings: PitcherRatings,
+  isStarter: boolean
+): number {
+  const total = pitcherCompositeScore(ratings, isStarter);
   return Math.max(60, Math.min(105, Math.round(48 + total * 0.58)));
+}
+
+// ── Pool-calibrated tier assignment (reverse search) ──────────────────────
+//
+// The absolute OVR formula above compresses the entire historical population
+// into a narrow Silver-centered band that never reaches Diamond/Perfect, so
+// tier-targeted reverse search returns little outside one tier.  Instead, we
+// rank a candidate population by composite score and map each rank to a tier
+// (and a calibrated OVR) so the population's tier proportions MIRROR the live
+// Perfect Team card pool.  Because the pool distribution is read fresh on every
+// request, the mapping tracks the small weekly drift as new cards are added.
+
+const TIER_ORDER: Tier[] = [
+  "Iron", "Bronze", "Silver", "Gold", "Diamond", "Perfect",
+];
+
+/** Display OVR range for each tier (used to spread calibrated OVRs within a tier). */
+const TIER_OVR_RANGE: Record<Tier, [number, number]> = {
+  Iron:    [40, 59],
+  Bronze:  [60, 69],
+  Silver:  [70, 79],
+  Gold:    [80, 89],
+  Diamond: [90, 99],
+  Perfect: [100, 105],
+};
+
+/** One tier's slice of the cumulative-from-bottom distribution, in [0,1]. */
+export interface TierBand {
+  tier: Tier;
+  lo: number; // cumulative fraction below this tier
+  hi: number; // cumulative fraction at the top of this tier
+}
+
+/**
+ * Convert per-tier card counts into cumulative bands ordered low→high.
+ * Returns null when the pool is too small to mirror reliably (caller should
+ * fall back to DEFAULT_TIER_BANDS).
+ */
+export function buildTierBands(counts: Partial<Record<Tier, number>>): TierBand[] | null {
+  const total = TIER_ORDER.reduce((s, t) => s + (counts[t] ?? 0), 0);
+  if (total < 50) return null;
+  const bands: TierBand[] = [];
+  let cum = 0;
+  for (const tier of TIER_ORDER) {
+    const frac = (counts[tier] ?? 0) / total;
+    bands.push({ tier, lo: cum, hi: cum + frac });
+    cum += frac;
+  }
+  bands[bands.length - 1].hi = 1; // guard against float drift
+  return bands;
+}
+
+/** Reasonable spread used only when the card pool is unavailable (e.g. dev without generated data). */
+export const DEFAULT_TIER_BANDS: TierBand[] = buildTierBands({
+  Iron: 2, Bronze: 30, Silver: 33, Gold: 20, Diamond: 12, Perfect: 3,
+})!;
+
+function bandAt(bands: TierBand[], cf: number): TierBand {
+  for (const b of bands) if (cf < b.hi) return b;
+  return bands[bands.length - 1];
+}
+
+/**
+ * Rank a candidate population by `scores` and assign each member a tier plus a
+ * calibrated OVR such that the population's tier proportions match `bands`.
+ * Tied scores receive identical tier+OVR.  Returns results aligned to the input
+ * order.  Ranking is peer-relative, so "Diamond" means "elite within this
+ * search's population (position + season)", which is the intent of reverse
+ * search — surfacing the standout seasons for a given slot.
+ */
+export function calibrateToPool(
+  scores: number[],
+  bands: TierBand[]
+): { ovr: number; tier: Tier }[] {
+  const n = scores.length;
+  const out = new Array<{ ovr: number; tier: Tier }>(n);
+  if (n === 0) return out;
+
+  const order = scores
+    .map((s, i) => ({ s, i }))
+    .sort((a, b) => a.s - b.s);
+
+  let k = 0;
+  while (k < n) {
+    let j = k;
+    while (j < n && order[j].s === order[k].s) j++; // [k,j) share a score
+    const cf = ((k + j) / 2) / n; // group midpoint as cumulative fraction
+    const band = bandAt(bands, cf);
+    const w = band.hi > band.lo ? (cf - band.lo) / (band.hi - band.lo) : 0.5;
+    const [ovrLo, ovrHi] = TIER_OVR_RANGE[band.tier];
+    const ovr = Math.round(ovrLo + w * (ovrHi - ovrLo));
+    for (let m = k; m < j; m++) out[order[m].i] = { ovr, tier: band.tier };
+    k = j;
+  }
+  return out;
 }
 
 // ── Public projection entry points ────────────────────────────────────────
